@@ -253,13 +253,34 @@ DItemRevisionGUID=
 GenerateClassCluster=0
 DocumentUniqueId=NUBUKKTC
 
+[Document13]
+DocumentPath=PCB.PcbDoc
+AnnotationEnabled=1
+AnnotateStartValue=1
+AnnotationIndexControlEnabled=0
+AnnotateSuffix=
+AnnotateScope=All
+AnnotateOrder=-1
+DoLibraryUpdate=1
+DoDatabaseUpdate=1
+ClassGenCCAutoEnabled=1
+ClassGenCCAutoRoomEnabled=0
+ClassGenNCAutoScope=None
+DItemRevisionGUID=
+GenerateClassCluster=0
+DocumentUniqueId=XYOGYUFS
+
 [Parameter1]
-Name=Author
-Value=K Garbicz
+Name=Revision
+Value=0.1
 
 [Parameter2]
 Name=Title
-Value=FogOff
+Value=Fogget
+
+[Parameter3]
+Name=Author
+Value=K Garbicz
 
 [Configuration1]
 Name=Sources
@@ -1196,10 +1217,22 @@ NetClassManualEnabled=1
 NetClassSeparateForBusSections=0
 
 [LibraryUpdateOptions]
-SelectedOnly=0
+SelectedOnly=1
 UpdateVariants=1
 UpdateToLatestRevision=1
 PartTypes=0
+ComponentLibIdentifierKind0=Library Name And Type
+ComponentLibraryIdentifier0=Library.DBLib/Resistors
+ComponentDesignItemID0=R_4.7k_0402_1
+ComponentSymbolReference0=R
+ComponentUpdate0=1
+ComponentIsDeviceSheet0=0
+ComponentLibIdentifierKind1=Library Name And Type
+ComponentLibraryIdentifier1=MECH_BT.SchLib
+ComponentDesignItemID1=MECH_BT
+ComponentSymbolReference1=MECH_BT
+ComponentUpdate1=1
+ComponentIsDeviceSheet1=0
 FullReplace=1
 UpdateDesignatorLock=1
 UpdatePartIDLock=1
@@ -1213,6 +1246,68 @@ RemoveParameters=0
 AddModels=1
 RemoveModels=1
 UpdateCurrentModels=1
+ParameterName0=Comment
+ParameterUpdate0=1
+ParameterName1=Component Kind
+ParameterUpdate1=1
+ParameterName2=Description
+ParameterUpdate2=1
+ParameterName3=HelpURL
+ParameterUpdate3=1
+ParameterName4=Library Reference
+ParameterUpdate4=1
+ParameterName5=Manufacturer
+ParameterUpdate5=1
+ParameterName6=Manufacturer Part Number
+ParameterUpdate6=1
+ParameterName7=Part Number
+ParameterUpdate7=1
+ParameterName8=Power
+ParameterUpdate8=1
+ParameterName9=SCH_Footprint
+ParameterUpdate9=1
+ParameterName10=Supplier 1
+ParameterUpdate10=1
+ParameterName11=Supplier 2
+ParameterUpdate11=1
+ParameterName12=Supplier 3
+ParameterUpdate12=1
+ParameterName13=Supplier 4
+ParameterUpdate13=1
+ParameterName14=Supplier 5
+ParameterUpdate14=1
+ParameterName15=Supplier 6
+ParameterUpdate15=1
+ParameterName16=Supplier 7
+ParameterUpdate16=1
+ParameterName17=Supplier Part Number 1
+ParameterUpdate17=1
+ParameterName18=Supplier Part Number 2
+ParameterUpdate18=1
+ParameterName19=Supplier Part Number 3
+ParameterUpdate19=1
+ParameterName20=Supplier Part Number 4
+ParameterUpdate20=1
+ParameterName21=Supplier Part Number 5
+ParameterUpdate21=1
+ParameterName22=Supplier Part Number 6
+ParameterUpdate22=1
+ParameterName23=Supplier Part Number 7
+ParameterUpdate23=1
+ParameterName24=Tolerance
+ParameterUpdate24=1
+ParameterName25=Value
+ParameterUpdate25=1
+ParameterName26=Voltage
+ParameterUpdate26=1
+ModelTypeGroup0=PCBLIB
+ModelTypeUpdate0=1
+ModelType0=PCBLIB
+ModelName0=BAT_SOLDERING_PADS
+ModelUpdate0=1
+ModelType1=PCBLIB
+ModelName1=R_0402_1005
+ModelUpdate1=1
 
 [DatabaseUpdateOptions]
 SelectedOnly=0
