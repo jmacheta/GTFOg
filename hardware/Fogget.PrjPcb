@@ -53,7 +53,7 @@ PrefsRevisionGUID=
 DocumentPath=Main.SchDoc
 AnnotationEnabled=1
 AnnotateStartValue=101
-AnnotationIndexControlEnabled=0
+AnnotationIndexControlEnabled=1
 AnnotateSuffix=
 AnnotateScope=All
 AnnotateOrder=0
@@ -137,11 +137,11 @@ DocumentUniqueId=PCFOFTTY
 [Document6]
 DocumentPath=CHANGELOG.SchDoc
 AnnotationEnabled=0
-AnnotateStartValue=601
+AnnotateStartValue=1
 AnnotationIndexControlEnabled=1
 AnnotateSuffix=
 AnnotateScope=All
-AnnotateOrder=5
+AnnotateOrder=6
 DoLibraryUpdate=1
 DoDatabaseUpdate=1
 ClassGenCCAutoEnabled=1
@@ -270,13 +270,47 @@ DItemRevisionGUID=
 GenerateClassCluster=0
 DocumentUniqueId=XYOGYUFS
 
-[Parameter1]
-Name=Revision
-Value=0.1
+[Document14]
+DocumentPath=USB.SchDoc
+AnnotationEnabled=1
+AnnotateStartValue=601
+AnnotationIndexControlEnabled=1
+AnnotateSuffix=
+AnnotateScope=All
+AnnotateOrder=5
+DoLibraryUpdate=1
+DoDatabaseUpdate=1
+ClassGenCCAutoEnabled=1
+ClassGenCCAutoRoomEnabled=0
+ClassGenNCAutoScope=None
+DItemRevisionGUID=
+GenerateClassCluster=0
+DocumentUniqueId=FSBBPODO
 
-[Parameter2]
+[Document15]
+DocumentPath=USB.Harness
+AnnotationEnabled=1
+AnnotateStartValue=1
+AnnotationIndexControlEnabled=0
+AnnotateSuffix=
+AnnotateScope=All
+AnnotateOrder=-1
+DoLibraryUpdate=1
+DoDatabaseUpdate=1
+ClassGenCCAutoEnabled=1
+ClassGenCCAutoRoomEnabled=0
+ClassGenNCAutoScope=None
+DItemRevisionGUID=
+GenerateClassCluster=0
+DocumentUniqueId=
+
+[Parameter1]
 Name=Title
 Value=Fogget
+
+[Parameter2]
+Name=Revision
+Value=0.1
 
 [Parameter3]
 Name=Author
@@ -1319,13 +1353,14 @@ PartTypes=0
 Net1=NetName=+2V5|NetColor=$000099FF
 Net2=NetName=GND|NetColor=clYellow
 Net3=NetName=VBAT|NetColor=clRed
+Net4=NetName=VDD_nRF|NetColor=$000099FF
 
 [Comparison Options]
 ComparisonOptions0=Kind=Net|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
 ComparisonOptions1=Kind=Net Class|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
 ComparisonOptions2=Kind=Component Class|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
 ComparisonOptions3=Kind=Rule|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
-ComparisonOptions4=Kind=Differential Pair|MinPercent=50|MinMatch=1|ShowMatch=0|UseName=0|InclAllRules=0
+ComparisonOptions4=Kind=Differential Pair|MinPercent=50|MinMatch=1|ShowMatch=0|UseName=-1|InclAllRules=0
 ComparisonOptions5=Kind=Structure Class|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
 
 [SmartPDF]
