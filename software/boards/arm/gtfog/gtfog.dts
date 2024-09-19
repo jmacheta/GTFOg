@@ -16,19 +16,19 @@
 
 	pwmleds {
 		compatible = "pwm-leds";
-		led_r {
+		led_r: led_r {
 			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 		};
 
-		led_g {
+		led_g: led_g {
 			pwms = <&pwm0 1 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 		};
 
-		led_b {
+		led_b: led_b {
 			pwms = <&pwm0 2 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 		};
 
-		fan_control {
+		fan: fan_control {
 			pwms = <&pwm0 3 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 		};
 	};
