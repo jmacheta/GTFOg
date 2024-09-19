@@ -2,7 +2,7 @@
 *.swp
 *~
 
-# build
-build*/
-CMakeUserPresets.json
+**/.vscode
+**/build*/
+**/CMakeUserPresets.json
 boards
