@@ -86,6 +86,8 @@ auto Fan::set_speed(unsigned percentage) noexcept -> std::expected<void, error_c
     if (0 != result) {
         return std::unexpected(error_code{result});
     }
+    
+    current_speed = percentage;
 
     return {};
 }

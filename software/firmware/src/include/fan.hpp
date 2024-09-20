@@ -7,7 +7,12 @@
 
 
 class Fan {
-    public:
+    unsigned current_speed = 0;
+
+  public:
+    [[nodiscard]] constexpr auto get_speed() const noexcept {
+        return current_speed;
+    }
     /**
      * Set the fan speed.
      * If the requested value is > 100, the fan will be set to 100%.

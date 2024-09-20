@@ -1,6 +1,7 @@
 
 #include "charger_status.hpp"
 #include "fan.hpp"
+#include "runtime_config.hpp"
 #include "status_led.hpp"
 
 #include <zephyr/kernel.h>
@@ -8,16 +9,15 @@
 #include <array>
 #include <cstdio>
 #include <tuple>
-
+int main2();
 int main(void) {
     auto& status_led = status_light_instance();
     auto& fan        = fan_instance();
 
 
     std::array colors = {Colors::Red, Colors::Green, Colors::Blue, Colors::White, Colors::Black};
+    int        i      = 0;
 
-    // printf("Hello World! %s\n", CONFIG_BOARD);
-    int i = 0;
     while (1) {
         for (auto color : colors) {
             ++i;
@@ -26,10 +26,17 @@ int main(void) {
             }
             std::ignore = fan.set_speed(i);
             std::ignore = status_led.set_color(color);
-            printf("uptime: % " PRId64 " \n", k_uptime_get());
+            printk("uptime: % " PRId64 " \n", k_uptime_get());
 
             printf("charger state: %d\n", static_cast<int>(get_charger_status().value_or(ChargerStatus{33})));
             k_msleep(1000);
+
+            auto v = Configuration::get<int>("wtf");
+            int  x = (v) ? v.value() : (int)v.error();
+
+            printk("value: %d\n", x);
+            ++x;
+            Configuration::set("wtf", x);
         }
     }
 }

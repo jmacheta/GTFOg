@@ -16,21 +16,21 @@ static const enum sensor_channel channels[] = {
 static int print_accels(const struct device* dev) {
     int                 ret;
     struct sensor_value accel[3];
-for(int i = 0; i < 3; i++) {
-    ret = sensor_sample_fetch(dev);
-    if (ret < 0) {
-        printf("%s: sensor_sample_fetch() failed: %d\n", dev->name, ret);
-        return ret;
+    for (int i = 0; i < 3; i++) {
+        ret = sensor_sample_fetch(dev);
+        if (ret < 0) {
+            printf("%s: sensor_sample_fetch() failed: %d\n", dev->name, ret);
+            return ret;
+        }
+
+        ret = sensor_channel_get(dev, channels[i], &accel[i]);
+        if (ret < 0) {
+            printf("%s: sensor_channel_get(%c) failed: %d\n", dev->name, 'X' + i, ret);
+            return ret;
+        }
     }
 
-    ret = sensor_channel_get(dev, channels[i], &accel[i]);
-    if (ret < 0) {
-        printf("%s: sensor_channel_get(%c) failed: %d\n", dev->name, 'X' + i, ret);
-        return ret;
-    }
-}
-
-    printk("%16s [m/s^2]:    (%12.6f, %12.6f, %12.6f)\n", dev->name, sensor_value_to_double(&accel[0]), sensor_value_to_double(&accel[1]), sensor_value_to_double(&accel[2]));
+    // printk("%16s [m/s^2]:    (%12.6f, %12.6f, %12.6f)\n", dev->name, sensor_value_to_double(&accel[0]), sensor_value_to_double(&accel[1]), sensor_value_to_double(&accel[2]));
 
     return 0;
 }
@@ -62,12 +62,11 @@ static void accelerometer_thread(void*, void*, void*) {
         printk("sensor: device %s not ready.\n", accel->name);
         return;
     }
-set_sampling_freq(accel);
+    set_sampling_freq(accel);
     while (1) {
-print_accels(accel);
+        print_accels(accel);
         k_sleep(K_MSEC(1000));
     }
 }
 
 K_THREAD_DEFINE(accelerometer, config::accelerometer_thread_stack_size, accelerometer_thread, nullptr, nullptr, nullptr, config::accelerometer_thread_priority, 0, 100);
-
