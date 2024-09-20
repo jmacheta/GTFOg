@@ -9,7 +9,8 @@
 #include <array>
 #include <cstdio>
 #include <tuple>
-int main2();
+int mainxd();
+int nvs_init();
 int main(void) {
     auto& status_led = status_light_instance();
     auto& fan        = fan_instance();
@@ -17,7 +18,15 @@ int main(void) {
 
     std::array colors = {Colors::Red, Colors::Green, Colors::Blue, Colors::White, Colors::Black};
     int        i      = 0;
+    
+            auto v = Configuration::get<int>("wtf");
+            int  x = (v) ? v.value() : (int)v.error();
 
+            printk("value: %d\n", x);
+            ++x;
+            Configuration::set("wtf", x);
+    mainxd();
+    // nvs_init();
     while (1) {
         for (auto color : colors) {
             ++i;

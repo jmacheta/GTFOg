@@ -6,6 +6,7 @@ project(firmware)
 
 target_sources(
   app PRIVATE src/main.cpp src/pwm_control.cpp src/charger_status.cpp src/accelerometer.cpp src/runtime_config.cpp
+              src/ble.cpp
 )
 
 target_include_directories(app PRIVATE src/include)

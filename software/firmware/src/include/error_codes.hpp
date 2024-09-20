@@ -2,8 +2,9 @@
 #define ERROR_CODES_HPP_
 
 enum class error_code {
-    hardware_error = -1,
-    device_not_ready = -2,
+    feature_disabled = -101,
+    hardware_error   = -102,
+    device_not_ready = -103,
 
 };
 

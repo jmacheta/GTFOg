@@ -10,9 +10,9 @@
 	pwm0_default: pwm0_default {
 		group1 {
 			psels = <NRF_PSEL(PWM_OUT0, 0, 13)>,
-					<NRF_PSEL(PWM_OUT1, 0, 14)>,
-					<NRF_PSEL(PWM_OUT2, 0, 15)>,
-					<NRF_PSEL(PWM_OUT3, 0, 16)>;
+			        <NRF_PSEL(PWM_OUT1, 0, 14)>,
+			        <NRF_PSEL(PWM_OUT2, 0, 15)>,
+			        <NRF_PSEL(PWM_OUT3, 0, 16)>;
 		};
 	};
 };
@@ -40,8 +40,8 @@
 	zephyr,user {
 		charger_stat1-gpios = <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		charger_stat2-gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-		accelerometer_interrupt1-gpios = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-		accelerometer_interrupt2-gpios = <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		accelerometer_interrupt1-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		accelerometer_interrupt2-gpios = <&gpio0 29 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 	};
 
 	aliases {
@@ -86,4 +86,7 @@
 };
 /delete-node/ &{/pin-controller/i2c0_sleep/group1/};
 
+&gpio0 {
+	wakeup-source;
+};
 

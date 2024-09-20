@@ -7,73 +7,105 @@
 #include <zephyr/fs/nvs.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
+#include <zephyr/settings/settings.h>
 #include <zephyr/storage/flash_map.h>
 
 
-static struct nvs_fs fs;
+struct direct_immediate_value {
+    size_t size;
+    void*  buffer;
+    bool   fetched;
+};
 
-#define NVS_PARTITION        storage_partition
-#define NVS_PARTITION_DEVICE FIXED_PARTITION_DEVICE(NVS_PARTITION)
-#define NVS_PARTITION_OFFSET FIXED_PARTITION_OFFSET(NVS_PARTITION)
+static int direct_loader_immediate_value(const char* name, size_t length, settings_read_cb read_cb, void* cb_arg, void* param) {
+    if constexpr (!IS_ENABLED(CONFIG_SETTINGS)) {
+        return -ENOTSUP;
+    }
+    auto        value = static_cast<direct_immediate_value*>(param);
+    const char* next;
+    size_t      name_len = settings_name_next(name, &next);
 
-int nvs_init() {
-    struct flash_pages_info info;
-    int                     rc;
-    printk("nvs init");
+    if (name_len == 0) {
+        if (length == value->size) {
+            int rc = read_cb(cb_arg, value->buffer, length);
+            if (rc >= 0) {
+                value->fetched = true;
+                printk("immediate load: OK.\n");
+                return 0;
+            }
 
+            printk("immediate load: failed (status %d)", rc);
+            return rc;
+        }
+        return -EINVAL;
+    }
 
-    /* define the nvs file system by settings with:
-     *	sector_size equal to the pagesize,
-     *	3 sectors
-     *	starting at NVS_PARTITION_OFFSET
+    /* other keys aren't served by the callback
+     * Return success in order to skip them
+     * and keep storage processing.
      */
-    fs.flash_device = NVS_PARTITION_DEVICE;
-    if (!device_is_ready(fs.flash_device)) {
-        printk("Flash device %s is not ready\n", fs.flash_device->name);
-        return -1;
-    }
-    fs.offset = NVS_PARTITION_OFFSET;
-    rc        = flash_get_page_info_by_offs(fs.flash_device, fs.offset, &info);
-    if (rc) {
-        printk("Unable to get page info, rc=%d\n", rc);
-        return rc;
-    }
-    fs.sector_size  = info.size;
-    fs.sector_count = 3U;
-
-    rc = nvs_mount(&fs);
-    if (rc) {
-        printk("Flash Init failed, rc=%d\n", rc);
-        return rc;
-    }
     return 0;
 }
 
 
-SYS_INIT_NAMED(nvs_init, nvs_init, APPLICATION, NVS_INITIALIZATION_PRIORITY);
+static int settings_init() {
+    if constexpr (!IS_ENABLED(CONFIG_SETTINGS)) {
+        printk("settings subsys initialization: fail - not enabled");
+
+        return static_cast<int>(error_code::feature_disabled);
+    }
+
+    int rc = settings_subsys_init();
+    if (rc != 0) {
+        printk("settings subsys initialization: fail (err %d)\n", rc);
+        return rc;
+    }
+
+    printk("settings subsys initialization: OK.\n");
+    return 0;
+}
+
+SYS_INIT_NAMED(settings_init, settings_init, APPLICATION, NVS_INITIALIZATION_PRIORITY);
 
 
-auto Configuration::do_get(uint16_t id, std::span<std::byte> buffer) noexcept -> std::expected<void, error_code> {
-    auto to_read = static_cast<ssize_t>(buffer.size_bytes());
-    auto read    = nvs_read(&fs, id, buffer.data(), to_read);
+auto Configuration::do_get(std::string_view key, std::span<std::byte> buffer) noexcept -> std::expected<void, error_code> {
+    if constexpr (!IS_ENABLED(CONFIG_SETTINGS)) {
+        return std::unexpected(error_code::feature_disabled);
+    }
+
+    direct_immediate_value descriptor{
+        .size    = buffer.size_bytes(),
+        .buffer  = buffer.data(),
+        .fetched = false,
+    };
+
+    int load_status = settings_load_subtree_direct(key.data(), direct_loader_immediate_value, &descriptor);
+
+    if ((0 == load_status) && !descriptor.fetched) {
+        load_status = -ENOENT;
+    }
+
 
     std::expected<void, error_code> result;
 
-    if (read != to_read) {
-        result = std::unexpected(error_code{read});
+    if (load_status != 0) {
+        result = std::unexpected(error_code{load_status});
     }
     return result;
 }
 
-auto Configuration::do_set(uint16_t id, std::span<std::byte const> data) noexcept -> std::expected<void, error_code> {
-    auto to_write = static_cast<ssize_t>(data.size_bytes());
+auto Configuration::do_set(std::string_view key, std::span<std::byte const> data) noexcept -> std::expected<void, error_code> {
+    if constexpr (!IS_ENABLED(CONFIG_SETTINGS)) {
+        return std::unexpected(error_code::feature_disabled);
+    }
 
-    auto written = nvs_write(&fs, id, data.data(), to_write);
+    int write_status = settings_save_one(key.data(), data.data(), data.size_bytes());
 
     std::expected<void, error_code> result;
 
-    if ((written != 0) && (written != to_write)) {
-        result = std::unexpected(error_code{written});
+    if (write_status != 0) {
+        result = std::unexpected(error_code{write_status});
     }
     return result;
+#
 }
