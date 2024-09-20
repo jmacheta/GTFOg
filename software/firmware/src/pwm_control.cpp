@@ -1,16 +1,17 @@
-#include "status_led.hpp"
 #include "fan.hpp"
+#include "status_led.hpp"
+
 #include <zephyr/drivers/pwm.h>
 
 #include <chrono>
 #include <tuple>
 
-static const pwm_dt_spec led_r = PWM_DT_SPEC_GET(DT_NODELABEL(led_r));
-static const pwm_dt_spec led_g = PWM_DT_SPEC_GET(DT_NODELABEL(led_g));
-static const pwm_dt_spec led_b = PWM_DT_SPEC_GET(DT_NODELABEL(led_b));
+static pwm_dt_spec const led_r = PWM_DT_SPEC_GET(DT_NODELABEL(led_r));
+static pwm_dt_spec const led_g = PWM_DT_SPEC_GET(DT_NODELABEL(led_g));
+static pwm_dt_spec const led_b = PWM_DT_SPEC_GET(DT_NODELABEL(led_b));
 
 
-static const pwm_dt_spec fan = PWM_DT_SPEC_GET(DT_NODELABEL(fan));
+static pwm_dt_spec const fan = PWM_DT_SPEC_GET(DT_NODELABEL(fan));
 
 
 using namespace std::chrono_literals;
