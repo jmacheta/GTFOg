@@ -7,7 +7,7 @@
 
 
 class Fan {
-    unsigned current_speed = 0;
+    int current_speed = 0;
 
   public:
     [[nodiscard]] constexpr auto get_speed() const noexcept {
@@ -16,9 +16,10 @@ class Fan {
     /**
      * Set the fan speed.
      * If the requested value is > 100, the fan will be set to 100%.
+     * If the requested value is < 0, the fan will be turned off.
      * @param[in] percentage The speed of the fan as a percentage.
      */
-    [[nodiscard]] auto set_speed(unsigned percentage) noexcept -> std::expected<void, error_code>;
+    [[nodiscard]] auto set_speed(int percentage) noexcept -> std::expected<void, error_code>;
 
     /**
      * Turn the fan off.

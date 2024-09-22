@@ -3,6 +3,7 @@
 
 #include <zephyr/drivers/pwm.h>
 
+#include <algorithm>
 #include <chrono>
 #include <tuple>
 
@@ -23,9 +24,7 @@ constexpr static nanoseconds pwm_period = 100us;
 
 
 constexpr static nanoseconds pulse_width(unsigned value, unsigned max) noexcept {
-    if (value > max) {
-        value = max;
-    }
+    value = std::clamp(value, 0u, max);
 
     if constexpr (invert_pwm) {
         value = max - value;
@@ -77,7 +76,9 @@ Light& status_light_instance() noexcept {
 }
 
 
-auto Fan::set_speed(unsigned percentage) noexcept -> std::expected<void, error_code> {
+auto Fan::set_speed(int percentage) noexcept -> std::expected<void, error_code> {
+    percentage = std::clamp(percentage, 0, 100);
+
     auto fan_pulse = pulse_width(percentage, 100).count();
     auto period    = pwm_period.count();
 
@@ -86,7 +87,7 @@ auto Fan::set_speed(unsigned percentage) noexcept -> std::expected<void, error_c
     if (0 != result) {
         return std::unexpected(error_code{result});
     }
-    
+
     current_speed = percentage;
 
     return {};

@@ -39,9 +39,11 @@
 
 	zephyr,user {
 		charger_stat1-gpios = <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-		charger_stat2-gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		charger_stat2-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt1-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt2-gpios = <&gpio0 29 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+
 	};
 
 	aliases {
@@ -51,6 +53,21 @@
 		/delete-property/ sw3;
 		/delete-property/ mcuboot-button0;
 	};
+
+
+	buttons {
+		compatible = "gpio-keys";
+		button_plus: button_0 {
+			gpios = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "Plus button";
+		};
+		button_minus: button_1 {
+			gpios = <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "Minus button";
+		};
+		/* ... other buttons ... */
+	};
+
 };
 // /delete-node/ &button0;
 // /delete-node/ &button1;
@@ -89,4 +106,5 @@
 &gpio0 {
 	wakeup-source;
 };
+
 
