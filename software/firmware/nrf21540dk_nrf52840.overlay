@@ -42,7 +42,7 @@
 		charger_stat2-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt1-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt2-gpios = <&gpio0 29 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-
+		io-channels = <&adc 0x0d>; // VDDHDIV5
 
 	};
 

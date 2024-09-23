@@ -4,25 +4,31 @@
 #include "error_codes.hpp"
 #include "system.hpp"
 
+#include <expected>
+#include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
-#include <expected>
+
+#include <tuple>
 #include <utility>
+
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 
 static gpio_dt_spec const stat1 = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, charger_stat1_gpios);
 static gpio_dt_spec const stat2 = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, charger_stat2_gpios);
 
-static gpio_callback stat1_on_change_callback;
-static gpio_callback stat2_on_change_callback;
 
+#if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) || !DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+#    error "No suitable devicetree overlay specified"
+#endif
 
-K_SEM_DEFINE(charger_status_pins_changed, 0, 1);
+#define DT_SPEC_AND_COMMA(node_id, prop, idx) ADC_DT_SPEC_GET_BY_IDX(node_id, idx),
 
-static void on_stat_change(device const*, gpio_callback*, uint32_t) {
-    k_sem_give(&charger_status_pins_changed);
-}
+/* Data of ADC io-channels specified in devicetree. */
+static const adc_dt_spec adc_channel[] = {DT_FOREACH_PROP_ELEM(DT_PATH(zephyr_user), io_channels, DT_SPEC_AND_COMMA)};
+
+static_assert(std::size(adc_channel) == 1, "There should be exaclty one channel to measure battery voltage");
 
 
 static auto get_charger_status() noexcept -> std::expected<charger_status, error_code> {
@@ -38,35 +44,64 @@ static auto get_charger_status() noexcept -> std::expected<charger_status, error
 }
 
 
-static int charger_status_init(void) {
+static int charger_status_thread(void) {
     using namespace events;
     [[unlikely]] if (!gpio_is_ready_dt(&stat1) || !gpio_is_ready_dt(&stat2)) { return -ENOENT; }
+    [[unlikely]] if (!adc_is_ready_dt(adc_channel)) { return -ENOENT; }
+
 
     int stat1_result = gpio_pin_configure_dt(&stat1, GPIO_INPUT);
     int stat2_result = gpio_pin_configure_dt(&stat2, GPIO_INPUT);
 
     [[unlikely]] if ((stat1_result < 0) || (stat2_result < 0)) { return -EINVAL; }
 
-    stat1_result = gpio_pin_interrupt_configure_dt(&stat1, GPIO_INT_EDGE_BOTH);
-    stat2_result = gpio_pin_interrupt_configure_dt(&stat2, GPIO_INT_EDGE_BOTH);
 
-    [[unlikely]] if ((stat1_result < 0) || (stat2_result < 0)) { return -ENOTSUP; }
-
-
-    gpio_init_callback(&stat1_on_change_callback, on_stat_change, BIT(stat1.pin));
-    gpio_init_callback(&stat2_on_change_callback, on_stat_change, BIT(stat2.pin));
-
-    gpio_add_callback(stat1.port, &stat1_on_change_callback);
-    gpio_add_callback(stat2.port, &stat2_on_change_callback);
+    int rc = adc_channel_setup_dt(adc_channel);
+    if (rc < 0) {
+        return rc;
+    }
 
 
+    uint16_t     sample_buffer;
+    adc_sequence sequence = {
+        .buffer      = &sample_buffer,
+        .buffer_size = sizeof(sample_buffer),
+    };
+
+    charger_status current_status = charger_status::off;
     while (1) {
-        k_sem_take(&charger_status_pins_changed, K_FOREVER);
-        printk("charger status changed\n");
+        int32_t val_mv;
+
+        printk("- %s, channel %d: ", adc_channel->dev->name, adc_channel->channel_id);
+
+        std::ignore = adc_sequence_init_dt(adc_channel, &sequence);
+
+        int err = adc_read_dt(adc_channel, &sequence);
+        if (err < 0) {
+            printk("Could not read (%d)\n", err);
+            continue;
+        }
+        val_mv = static_cast<int32_t>(sample_buffer);
+
+        printk("%" PRId32, val_mv);
+        err = adc_raw_to_millivolts_dt(adc_channel, &val_mv);
+        /* conversion to mV may not be supported, skip if not */
+        if (err < 0) {
+            printk(" (value in mV not available)\n");
+        } else {
+            printk(" = %" PRId32 " mV\n", val_mv);
+        }
+
+        k_sleep(K_MSEC(1000));
+
         auto status = get_charger_status().value_or(charger_status::recoverable_fault);
-        system_process_event(charger_status_changed{status});
+        if (current_status != status) {
+            current_status = status;
+            printk("charger status changed\n");
+            system_process_event(charger_status_changed{status});
+        }
     }
     std::unreachable();
 }
 
-K_THREAD_DEFINE(charger_status, config::charger_status_thread_stack_size, charger_status_init, nullptr, nullptr, nullptr, config::charger_status_thread_priority, 0, 0);
+K_THREAD_DEFINE(charger_status, config::charger_status_thread_stack_size, charger_status_thread, nullptr, nullptr, nullptr, config::charger_status_thread_priority, 0, 0);
