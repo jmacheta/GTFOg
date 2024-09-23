@@ -57,9 +57,7 @@ static int charger_status_thread(void) {
 
 
     int rc = adc_channel_setup_dt(adc_channel);
-    if (rc < 0) {
-        return rc;
-    }
+    [[unlikely]] if (rc < 0) { return rc; }
 
 
     uint16_t     sample_buffer;
@@ -70,29 +68,20 @@ static int charger_status_thread(void) {
 
     charger_status current_status = charger_status::off;
     while (1) {
-        int32_t val_mv;
-
         printk("- %s, channel %d: ", adc_channel->dev->name, adc_channel->channel_id);
 
         std::ignore = adc_sequence_init_dt(adc_channel, &sequence);
 
         int err = adc_read_dt(adc_channel, &sequence);
-        if (err < 0) {
-            printk("Could not read (%d)\n", err);
-            continue;
-        }
-        val_mv = static_cast<int32_t>(sample_buffer);
+        [[unlikely]] if (err < 0) { continue; }
 
-        printk("%" PRId32, val_mv);
-        err = adc_raw_to_millivolts_dt(adc_channel, &val_mv);
+        int32_t val_mv = static_cast<int32_t>(sample_buffer);
+
+        std::ignore = adc_raw_to_millivolts_dt(adc_channel, &val_mv);
         /* conversion to mV may not be supported, skip if not */
-        if (err < 0) {
-            printk(" (value in mV not available)\n");
-        } else {
-            printk(" = %" PRId32 " mV\n", val_mv);
-        }
+        val_mv = 5 * val_mv;
+        printk(" = %" PRId32 " mV\n", val_mv);
 
-        k_sleep(K_MSEC(1000));
 
         auto status = get_charger_status().value_or(charger_status::recoverable_fault);
         if (current_status != status) {
@@ -100,6 +89,7 @@ static int charger_status_thread(void) {
             printk("charger status changed\n");
             system_process_event(charger_status_changed{status});
         }
+        k_sleep(K_MSEC(1000));
     }
     std::unreachable();
 }

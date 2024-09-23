@@ -7,13 +7,14 @@
 #include "fan.hpp"
 #include "include/charger_status.hpp"
 #include "status_led.hpp"
-#include <algorithm>
+
 #include <boost/sml.hpp>
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/poweroff.h>
 #include <zephyr/sys/reboot.h>
 
+#include <algorithm>
 #include <tuple>
 #include <utility>
 
@@ -103,6 +104,7 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
     }
 };
 
+
 static auto decrease_fan_speed = []() {
     auto& fan = fan_instance();
 
@@ -129,6 +131,11 @@ static auto do_power_on = []() {
     printk("System powered on\n");
 };
 
+static auto do_power_off = []() { system_power_off(); };
+
+
+static auto update_signaling_scheme = [](charger_status_changed const& event) { printk("Charger status changed\n"); };
+
 
 struct system_state {
     auto operator()() const {
@@ -143,7 +150,9 @@ struct system_state {
 
             "manual_mode"_s + event<plus_button_pressed> / increase_fan_speed,  //
             "manual_mode"_s + event<minus_button_pressed> / decrease_fan_speed, //
+            // "manual_mode"_s + event<minus_button_pressed> [hold_long_enough_for_power_off)] / do_power_off = X, //
 
+            state<_> + event<charger_status_changed> / update_signaling_scheme,
             state<_> + event<both_buttons_pressed>[hold_long_enough_for_power_off] / []() { system_power_off(); } = X //
         );
     }

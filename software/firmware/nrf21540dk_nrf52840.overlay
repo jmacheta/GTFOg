@@ -42,7 +42,7 @@
 		charger_stat2-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt1-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		accelerometer_interrupt2-gpios = <&gpio0 29 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-		io-channels = <&adc 0x0d>; // VDDHDIV5
+		io-channels = <&adc 0>; // VDDHDIV5
 
 	};
 
@@ -108,3 +108,17 @@
 };
 
 
+
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_2";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_VDDHDIV5>; /* P0.30 */
+		zephyr,resolution = <12>;
+	};
+};
