@@ -326,16 +326,16 @@ DocumentPath=Project Outputs for Fogget\Design Rule Check - PCB.html
 DItemRevisionGUID=
 
 [Parameter1]
-Name=Title
-Value=Fogget
+Name=Author
+Value=K Garbicz
 
 [Parameter2]
 Name=Revision
-Value=0.2
+Value=0.3
 
 [Parameter3]
-Name=Author
-Value=K Garbicz
+Name=Title
+Value=Fogget
 
 [DiffPairSuffix1]
 Positive=_+
@@ -1281,9 +1281,9 @@ UpdateVariants=1
 UpdateToLatestRevision=1
 PartTypes=0
 ComponentLibIdentifierKind0=Library Name And Type
-ComponentLibraryIdentifier0=Library.DBLib/Inductors
-ComponentDesignItemID0=L_LQM18DZ100M70L
-ComponentSymbolReference0=L
+ComponentLibraryIdentifier0=MECH_FAN_4010.SchLib
+ComponentDesignItemID0=MECH_FAN_4010
+ComponentSymbolReference0=MECH_FAN_4010
 ComponentUpdate0=1
 ComponentIsDeviceSheet0=0
 FullReplace=1
@@ -1303,60 +1303,18 @@ ParameterName0=Comment
 ParameterUpdate0=1
 ParameterName1=Component Kind
 ParameterUpdate1=1
-ParameterName2=Current
+ParameterName2=Description
 ParameterUpdate2=1
-ParameterName3=Description
+ParameterName3=Library Reference
 ParameterUpdate3=1
-ParameterName4=HelpURL
+ParameterName4=SCH_Footprint
 ParameterUpdate4=1
-ParameterName5=Library Reference
+ParameterName5=Value
 ParameterUpdate5=1
-ParameterName6=Manufacturer
-ParameterUpdate6=1
-ParameterName7=Manufacturer Part Number
-ParameterUpdate7=1
-ParameterName8=Part Number
-ParameterUpdate8=1
-ParameterName9=Resistance
-ParameterUpdate9=1
-ParameterName10=SCH_Footprint
-ParameterUpdate10=1
-ParameterName11=Supplier 1
-ParameterUpdate11=1
-ParameterName12=Supplier 2
-ParameterUpdate12=1
-ParameterName13=Supplier 3
-ParameterUpdate13=1
-ParameterName14=Supplier 4
-ParameterUpdate14=1
-ParameterName15=Supplier 5
-ParameterUpdate15=1
-ParameterName16=Supplier 6
-ParameterUpdate16=1
-ParameterName17=Supplier 7
-ParameterUpdate17=1
-ParameterName18=Supplier Part Number 1
-ParameterUpdate18=1
-ParameterName19=Supplier Part Number 2
-ParameterUpdate19=1
-ParameterName20=Supplier Part Number 3
-ParameterUpdate20=1
-ParameterName21=Supplier Part Number 4
-ParameterUpdate21=1
-ParameterName22=Supplier Part Number 5
-ParameterUpdate22=1
-ParameterName23=Supplier Part Number 6
-ParameterUpdate23=1
-ParameterName24=Supplier Part Number 7
-ParameterUpdate24=1
-ParameterName25=Value
-ParameterUpdate25=1
-ParameterName26=Voltage
-ParameterUpdate26=1
 ModelTypeGroup0=PCBLIB
 ModelTypeUpdate0=1
 ModelType0=PCBLIB
-ModelName0=L_0603_1608
+ModelName0=FAN_4010_PAD
 ModelUpdate0=1
 
 [DatabaseUpdateOptions]
@@ -1369,13 +1327,15 @@ PartTypes=0
 Net1=NetName=+2V5|NetColor=$000099FF
 Net2=NetName=5V_USB|NetColor=clRed
 Net3=NetName=GND|NetColor=$00666666
-Net4=NetName=NetC501_1|NetColor=$000099FF
-Net5=NetName=NetC502_1|NetColor=$000099FF
-Net6=NetName=NetU201_22|NetColor=$000099FF
-Net7=NetName=VBAT|NetColor=clRed
-Net8=NetName=VDD_ADXL|NetColor=$000099FF
-Net9=NetName=VDD_nRF|NetColor=$000099FF
-Net10=NetName=VSYS|NetColor=clRed
+Net4=NetName=NetBAT301_1|NetColor=clRed
+Net5=NetName=NetBAT302_1|NetColor=clRed
+Net6=NetName=NetC501_1|NetColor=$000099FF
+Net7=NetName=NetC502_1|NetColor=$000099FF
+Net8=NetName=NetU201_22|NetColor=$000099FF
+Net9=NetName=VBAT|NetColor=clRed
+Net10=NetName=VDD_ADXL|NetColor=$000099FF
+Net11=NetName=VDD_nRF|NetColor=$000099FF
+Net12=NetName=VSYS|NetColor=clRed
 
 [Comparison Options]
 ComparisonOptions0=Kind=Net|MinPercent=75|MinMatch=3|ShowMatch=0|UseName=-1|InclAllRules=0
