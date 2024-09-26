@@ -321,10 +321,6 @@ DItemRevisionGUID=
 GenerateClassCluster=0
 DocumentUniqueId=
 
-[GeneratedDocument1]
-DocumentPath=Project Outputs for Fogget\Design Rule Check - PCB.html
-DItemRevisionGUID=
-
 [Parameter1]
 Name=Author
 Value=K Garbicz
