@@ -67,7 +67,7 @@ GenerateClassCluster=0
 DocumentUniqueId=ZQGORYKH
 
 [Document2]
-DocumentPath=nRF52832.SchDoc
+DocumentPath=nRF52833.SchDoc
 AnnotationEnabled=1
 AnnotateStartValue=201
 AnnotationIndexControlEnabled=1
@@ -203,7 +203,7 @@ GenerateClassCluster=0
 DocumentUniqueId=WNFBQKXX
 
 [Document10]
-DocumentPath=nRF52832.Harness
+DocumentPath=nRF52833.Harness
 AnnotationEnabled=1
 AnnotateStartValue=1
 AnnotationIndexControlEnabled=0
