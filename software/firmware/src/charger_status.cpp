@@ -4,6 +4,7 @@
 #include "error_codes.hpp"
 #include "system.hpp"
 
+#include <SI/electric_potential.h>
 #include <expected>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
@@ -12,6 +13,20 @@
 #include <tuple>
 #include <utility>
 
+
+/**
+ * Charger status
+ * The values are encoded STAT1 and STAT2 pin states
+ */
+enum class charger_status {
+    off               = 0b00,
+    recoverable_fault = 0b01,
+    charging          = 0b10,
+    charge_completed  = 0b11,
+};
+
+
+using namespace SI::literals;
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 
@@ -79,16 +94,16 @@ static int charger_status_thread(void) {
 
         std::ignore = adc_raw_to_millivolts_dt(adc_channel, &val_mv);
         /* conversion to mV may not be supported, skip if not */
-        val_mv = 5 * val_mv;
-        printk(" = %" PRId32 " mV\n", val_mv);
-
+        auto v_batt = 5_mV * val_mv;
 
         auto status = get_charger_status().value_or(charger_status::recoverable_fault);
         if (current_status != status) {
             current_status = status;
-            printk("charger status changed\n");
             system_process_event(charger_status_changed{status});
         }
+
+        printk("v_bat: %" PRId64 ", charger status: %d\n", v_batt.value(), static_cast<int>(status));
+
         k_sleep(K_MSEC(1000));
     }
     std::unreachable();

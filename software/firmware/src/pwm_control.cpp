@@ -25,11 +25,7 @@ constexpr static nanoseconds pwm_period = 100us;
 
 constexpr static nanoseconds pulse_width(unsigned value, unsigned max) noexcept {
     value = std::clamp(value, 0u, max);
-
-    if constexpr (invert_pwm) {
-        value = max - value;
-    }
-
+    value = max - value;
     return value * pwm_period / max;
 }
 

@@ -2,6 +2,8 @@
 #define COMPILE_TIME_CONFIG_HPP_
 
 #include <chrono>
+#include <SI/electric_potential.h>
+
 
 #define NVS_INITIALIZATION_PRIORITY            20
 #define CHARGER_STATUS_INITIALIZATION_PRIORITY 30
@@ -9,6 +11,8 @@
 
 namespace config {
     using namespace std::chrono_literals;
+using namespace SI::literals;
+
 
     constexpr auto accelerometer_thread_priority   = 10u;
     constexpr auto accelerometer_thread_stack_size = 2048u;
@@ -28,6 +32,10 @@ namespace config {
     constexpr auto button_max_change_rate       = 5u;
 
     constexpr auto both_buttons_power_off       = 3s;
+
+
+
+    constexpr SI::milli_volts_t<int64_t> battery_cutoff_voltage = 3300_mV;
 
 
 } // namespace config

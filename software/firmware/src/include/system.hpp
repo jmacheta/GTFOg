@@ -1,6 +1,8 @@
 #ifndef SYSTEM_HPP_
 #define SYSTEM_HPP_
 
+#include <expected>
+#include "error_codes.hpp"
 
 #include <chrono>
 
@@ -15,16 +17,15 @@ struct uptime_clock {
     static auto now() noexcept -> time_point;
 };
 
-namespace events {
-
-    struct power_on {};
-} // namespace events
 
 template<typename T> void system_process_event(T event);
-
 
 [[noreturn]] void system_power_off() noexcept;
 
 [[noreturn]] void system_on_unrecoverable_error() noexcept;
+
+
+auto enable_wake_from_buttons() noexcept -> std::expected<void, error_code>;
+
 
 #endif

@@ -20,6 +20,6 @@ target_sources(
 target_compile_options(app PRIVATE -fno-exceptions -fno-rtti)
 target_include_directories(app PRIVATE src/include)
 
-FetchContent_MakeAvailable(sml)
+FetchContent_MakeAvailable(sml si)
 
-target_link_libraries(app PRIVATE sml::sml)
+target_link_libraries(app PRIVATE sml::sml SI::SI)

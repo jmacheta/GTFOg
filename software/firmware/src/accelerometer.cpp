@@ -1,10 +1,10 @@
-#include "accelerometer.hpp"
-
 #include "compile_time_config.hpp"
+#include "events.hpp"
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
+
 static const device* accel = DEVICE_DT_GET(DT_NODELABEL(accelerometer));
 
 static const enum sensor_channel channels[] = {
@@ -30,7 +30,7 @@ static int print_accels(const struct device* dev) {
         }
     }
 
-    printk("%16s [m/s^2]:    (%12.6f, %12.6f, %12.6f)\n", dev->name, sensor_value_to_double(&accel[0]), sensor_value_to_double(&accel[1]), sensor_value_to_double(&accel[2]));
+    // printk("%16s [m/s^2]:    (%12.6f, %12.6f, %12.6f)\n", dev->name, sensor_value_to_double(&accel[0]), sensor_value_to_double(&accel[1]), sensor_value_to_double(&accel[2]));
 
     return 0;
 }
