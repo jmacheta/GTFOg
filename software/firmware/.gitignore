@@ -1,0 +1,9 @@
+# editors
+*.swp
+*~
+
+**/.vscode
+**/build*/
+**/CMakeUserPresets.json
+boards
+**/.cache
