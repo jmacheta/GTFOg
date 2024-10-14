@@ -1,0 +1,3 @@
+I2C=SDA,SCL
+LED_RGB=R,G,B
+USB=D_-,D_+
