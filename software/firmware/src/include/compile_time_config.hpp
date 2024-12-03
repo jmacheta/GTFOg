@@ -1,8 +1,10 @@
 #ifndef COMPILE_TIME_CONFIG_HPP_
 #define COMPILE_TIME_CONFIG_HPP_
 
-#include <chrono>
 #include <SI/electric_potential.h>
+
+#include <chrono>
+
 
 
 #define NVS_INITIALIZATION_PRIORITY            20
@@ -11,7 +13,7 @@
 
 namespace config {
     using namespace std::chrono_literals;
-using namespace SI::literals;
+    using namespace SI::literals;
 
 
     constexpr auto accelerometer_thread_priority   = 10u;
@@ -31,11 +33,10 @@ using namespace SI::literals;
     constexpr auto button_change_rate_threshold = 3s;
     constexpr auto button_max_change_rate       = 5u;
 
-    constexpr auto both_buttons_power_off       = 3s;
+    constexpr auto both_buttons_power_off = 3s;
 
 
-
-    constexpr SI::milli_volts_t<int64_t> battery_cutoff_voltage = 3300_mV;
+    constexpr SI::milli_volt_t<int64_t> battery_cutoff_voltage = 3300_mV;
 
 
 } // namespace config

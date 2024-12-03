@@ -10,12 +10,12 @@ target_sources(
   app
   PRIVATE src/main.cpp
           src/pwm_control.cpp
-          src/charger_status.cpp
-          src/accelerometer.cpp
-          src/runtime_config.cpp
-          src/ble.cpp
-          src/system.cpp
-          src/buttons.cpp
+          # src/charger_status.cpp
+          # src/accelerometer.cpp
+          # src/runtime_config.cpp
+          # src/ble.cpp
+          # src/system.cpp
+          # src/buttons.cpp
 )
 target_compile_options(app PRIVATE -fno-exceptions -fno-rtti)
 target_include_directories(app PRIVATE src/include)

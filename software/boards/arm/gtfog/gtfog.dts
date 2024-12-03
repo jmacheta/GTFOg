@@ -33,24 +33,26 @@
 		};
 	};
 
+
+
 	buttons {
 		compatible = "gpio-keys";
 		button_minus {
-			label = "button_minus";
-			gpios = <&gpio0 29 0>;
+			label = "Minus button";
+			gpios = <&gpio0 15 GPIO_PULL_UP>;
 		};
 
 		button_plus {
-			label = "button_plus";
-			gpios = <&gpio0 28 0>;
+			label = "Plus button";
+			gpios = <&gpio0 17 GPIO_PULL_UP>;
 		};
 	};
 
 	zephyr,user {
-		charger_stat1-gpios = <&gpio0 31 GPIO_PULL_UP>;
-		charger_stat2-gpios = <&gpio1 9 GPIO_PULL_UP>;
-		accelerometer_interrupt1-gpios = <&gpio0 2 0>;
-		accelerometer_interrupt2-gpios = <&gpio0 3 0>;
+		charger_stat1-gpios = <&gpio0 3 GPIO_PULL_UP>;
+		charger_stat2-gpios = <&gpio0 2 GPIO_PULL_UP>;
+		accelerometer_interrupt1-gpios = <&gpio0 5 0>;
+		accelerometer_interrupt2-gpios = <&gpio0 4 0>;
 	};
 };
 
@@ -91,11 +93,12 @@
 	status = "okay";
 	clock-frequency = <I2C_BITRATE_FAST>;
 	pinctrl-0 = <&i2c0_default>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&i2c0_sleep>;
+	pinctrl-names = "default", "sleep";
 	adxl345@0 {
 		compatible = "adi,adxl345";
 		reg = <0x0>;
-		supply-gpios = <&gpio0 9 0>;
+		supply-gpios = <&gpio1 9 0>;
 	};
 };
 
@@ -104,7 +107,16 @@
 &pwm0 {
 	status = "okay";
 	pinctrl-0 = <&pwm0_default>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&pwm0_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+
+&pwm1 {
+	status = "okay";
+	pinctrl-0 = <&pwm1_default>;
+	pinctrl-1 = <&pwm1_sleep>;
+	pinctrl-names = "default", "sleep";
 };
 
 &gpio0 {
@@ -114,16 +126,48 @@
 &pinctrl {
 	pwm0_default: pwm0_default {
 		group1 {
-			psels = <NRF_PSEL(PWM_OUT0, 0, 15)>,
-					<NRF_PSEL(PWM_OUT1, 0, 17)>,
-					<NRF_PSEL(PWM_OUT2, 0, 20)>,
-					<NRF_PSEL(PWM_OUT3, 0, 11)>;
+			psels = <NRF_PSEL(PWM_OUT0, 0, 31)>,
+			        <NRF_PSEL(PWM_OUT1, 0, 30)>,
+			        <NRF_PSEL(PWM_OUT2, 0, 29)>,
+			        <NRF_PSEL(PWM_OUT3, 0, 11)>;
+		};
+	};
+
+	pwm0_sleep: pwm0_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 31)>,
+			        <NRF_PSEL(PWM_OUT1, 0, 30)>,
+			        <NRF_PSEL(PWM_OUT2, 0, 29)>,
+			        <NRF_PSEL(PWM_OUT3, 0, 11)>;
+			low-power-enable;
+
 		};
 	};
 
 	i2c0_default: i2c0_default {
+
+		group2 {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 0)>, <NRF_PSEL(TWIM_SDA, 0, 1)>;
+			bias-pull-up;
+		};
+	};
+	i2c0_sleep: i2c0_sleep {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SCL, 0, 5)>, <NRF_PSEL(TWIM_SDA, 0, 4)>;
+			psels = <NRF_PSEL(TWIM_SCL, 0, 0)>, <NRF_PSEL(TWIM_SDA, 0, 1)>;
+			low-power-enable;
+		};
+	};
+
+	pwm1_default: pwm1_default {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 20)>;
+		};
+	};
+
+	pwm1_sleep: pwm1_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 20)>;
+			low-power-enable;
 		};
 	};
 };
@@ -138,6 +182,11 @@
 
 &adc {
 	status = "okay";
-	io-channels = <&adc 6>;
+	io-channels = <&adc 4>;
 	io-channel-names = "vbat";
+};
+
+
+&gpiote {
+	status = "okay";
 };

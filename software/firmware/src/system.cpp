@@ -1,11 +1,11 @@
 #include "system.hpp"
 
-#include "accelerometer.hpp"
+// #include "accelerometer.hpp"
 #include "ble.hpp"
-#include "buttons.hpp"
+// #include "buttons.hpp"
 #include "compile_time_config.hpp"
 #include "fan.hpp"
-#include "include/charger_status.hpp"
+// #include "include/charger_status.hpp"
 #include "status_led.hpp"
 
 #include <boost/sml.hpp>
