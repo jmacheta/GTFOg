@@ -1,11 +1,10 @@
-#ifndef STATUS_LED_HPP_
-#define STATUS_LED_HPP_
+#ifndef STATUS_LIGHT_HPP_
+#define STATUS_LIGHT_HPP_
 
 #include "error_codes.hpp"
 
-#include <expected>
-
 #include <cstdint>
+
 
 /// RGB color representation.
 struct Color {
@@ -27,7 +26,7 @@ namespace Colors {
 } // namespace Colors
 
 /// Status light control.
-class Light {
+class StatusLight {
     bool output_allowed{true};
 
   public:
@@ -35,7 +34,7 @@ class Light {
      * Allow or disallow light output.
      * @param allowed True to allow output, false to disallow.
      */
-    void allow_output(bool allowed) noexcept;
+    void allow_output(bool allowed);
 
     /**
      * Check if output is allowed.
@@ -50,26 +49,26 @@ class Light {
      * @param color The color to set.
      * @return An error code if the operation failed.
      */
-    [[nodiscard]] auto set_color(Color color) noexcept -> std::expected<void, error_code>;
+    void set_color(Color color);
 
     /**
      * Turn the light off.
      * @return An error code if the operation failed.
      */
-    auto off() noexcept -> std::expected<void, error_code> {
+    auto off() {
         return set_color(Colors::Black);
     }
 
 
   protected:
-    ~Light() = default;
-    friend Light& status_light_instance() noexcept;
+    ~StatusLight() = default;
+    friend StatusLight& status_light_instance() noexcept;
 };
 
 /**
  * Get the status light instance.
  * @return The status light instance.
  */
-[[nodiscard]] Light& status_light_instance() noexcept;
+[[nodiscard]] StatusLight& status_light_instance() noexcept;
 
 #endif
