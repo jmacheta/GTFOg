@@ -1,12 +1,13 @@
 #include "system.hpp"
 
+#include "events.hpp"
+
 // #include "accelerometer.hpp"
-#include "ble.hpp"
 // #include "buttons.hpp"
 #include "compile_time_config.hpp"
 #include "fan.hpp"
 // #include "include/charger_status.hpp"
-#include "status_led.hpp"
+#include "status_light.hpp"
 
 #include <boost/sml.hpp>
 #include <zephyr/irq.h>
@@ -31,20 +32,17 @@ void system_power_off() noexcept {
     auto& status_led = status_light_instance();
     auto& fan        = fan_instance();
 
-    std::ignore = status_led.set_color(Colors::White);
-    std::ignore = fan.set_speed(0);
+    status_led.set_color(Colors::White);
+    fan.set_speed(0);
 
     for (volatile int i = 0; i != 10000000; ++i) {
         // do nothing
     }
-    std::ignore = status_led.set_color(Colors::Black);
+    status_led.set_color(Colors::Black);
 
-    if (!enable_wake_from_buttons()) {
-        system_on_unrecoverable_error();
-    }
+    enable_wake_from_buttons();
+
     sys_poweroff();
-
-    std::unreachable();
 }
 
 
@@ -59,7 +57,7 @@ namespace sml = boost::sml;
 using namespace events;
 struct my_logger {
     template<class SM, class TEvent> void log_process_event(const TEvent&) {
-        // printk("[%s][process_event] %s\n", sml::aux::get_type_name<SM>(), sml::aux::get_type_name<TEvent>());
+        printk("[%s][process_event] %s\n", sml::aux::get_type_name<SM>(), sml::aux::get_type_name<TEvent>());
     }
 
     template<class SM, class TGuard, class TEvent> void log_guard(const TGuard&, const TEvent&, bool result) {
@@ -95,10 +93,10 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
 
     if (wtf < 100) {
         printk("Increasing fan speed to %d\n", wtf);
-        std::ignore = fan.set_speed(wtf);
+        // std::ignore = fan.set_speed(wtf);
     } else {
-        wtf         = 100;
-        std::ignore = fan.set_speed(wtf);
+        wtf = 100;
+        // std::ignore = fan.set_speed(wtf);
 
         printk("Fan is already at maximum speed\n");
     }
@@ -111,10 +109,10 @@ static auto decrease_fan_speed = []() {
     wtf--;
     if (wtf > 0) {
         printk("Decreasing fan speed to %d\n", wtf);
-        std::ignore = fan.set_speed(wtf);
+        // std::ignore = fan.set_speed(wtf);
     } else {
-        wtf         = 0;
-        std::ignore = fan.set_speed(wtf);
+        wtf = 0;
+        // std::ignore = fan.set_speed(wtf);
 
 
         printk("Fan is already off\n");
@@ -125,8 +123,8 @@ static auto do_power_on = []() {
     auto& status_led = status_light_instance();
     auto& fan        = fan_instance();
 
-    std::ignore = status_led.set_color(Colors::Green);
-    std::ignore = fan.set_speed(0);
+    status_led.set_color(Colors::Green);
+    fan.set_speed(0);
 
     printk("System powered on\n");
 };
@@ -134,7 +132,7 @@ static auto do_power_on = []() {
 static auto do_power_off = []() { system_power_off(); };
 
 
-static auto update_signaling_scheme = [](charger_status_changed const& event) { printk("Charger status changed\n"); };
+// static auto update_signaling_scheme = [](charger_status_changed const& event) { printk("Charger status changed\n"); };
 
 
 struct system_state {
@@ -152,7 +150,7 @@ struct system_state {
             "manual_mode"_s + event<minus_button_pressed> / decrease_fan_speed, //
             // "manual_mode"_s + event<minus_button_pressed> [hold_long_enough_for_power_off)] / do_power_off = X, //
 
-            state<_> + event<charger_status_changed> / update_signaling_scheme,
+            // state<_> + event<charger_status_changed> / update_signaling_scheme,
             state<_> + event<both_buttons_pressed>[hold_long_enough_for_power_off] / []() { system_power_off(); } = X //
         );
     }
@@ -173,7 +171,7 @@ template<typename T> void system_process_event(T event) {
 }
 
 template void system_process_event(events::power_on);
-template void system_process_event(events::charger_status_changed);
+// template void system_process_event(events::charger_status_changed);
 template void system_process_event(events::plus_button_pressed);
 template void system_process_event(events::minus_button_pressed);
 template void system_process_event(events::both_buttons_pressed);

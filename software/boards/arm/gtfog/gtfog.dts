@@ -44,12 +44,12 @@
 		compatible = "gpio-keys";
 		button_minus: button0 {
 			label = "Minus button";
-			gpios = <&gpio0 15 GPIO_PULL_UP>;
+			gpios = <&gpio0 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		};
 
 		button_plus: button1{
 			label = "Plus button";
-			gpios = <&gpio0 17 GPIO_PULL_UP>;
+			gpios = <&gpio0 17 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		};
 	};
 

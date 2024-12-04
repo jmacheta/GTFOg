@@ -14,7 +14,7 @@ target_sources(
           src/accelerometer.cpp
           # src/runtime_config.cpp
           # src/ble.cpp
-          # src/system.cpp
+          src/system.cpp
           src/buttons.cpp
 )
 target_include_directories(app PRIVATE src/include)
