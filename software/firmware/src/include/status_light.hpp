@@ -1,16 +1,14 @@
 #ifndef STATUS_LIGHT_HPP_
 #define STATUS_LIGHT_HPP_
 
-#include "error_codes.hpp"
-
 #include <cstdint>
 
 
 /// RGB color representation.
 struct Color {
-    uint8_t red;
-    uint8_t green;
-    uint8_t blue;
+    std::uint8_t red;
+    std::uint8_t green;
+    std::uint8_t blue;
 };
 
 /// Predefined colors.

@@ -1,7 +1,7 @@
 // #include "buttons.hpp"
 
 #include "compile_time_config.hpp"
-#include "error_codes.hpp"
+// #include "error_codes.hpp"
 #include "system.hpp"
 
 #include <zephyr/drivers/gpio.h>
@@ -103,7 +103,7 @@ auto get_button_state(bool is_pressed, button_state previous, uptime_clock::time
 }
 
 static void buttons_thread(void*, void*, void*) {
-    using namespace events;
+    // using namespace events;
     auto last_plus_press  = uptime_clock::time_point{};
     auto last_minus_press = uptime_clock::time_point{};
 
@@ -111,7 +111,7 @@ static void buttons_thread(void*, void*, void*) {
     auto minus_previous_state = button_state::released;
 
     while (1) {
-        auto now = uptime_clock::now();
+        auto now = last_minus_press;//uptime_clock::now();
 
         bool plus_was_pressed  = (plus_previous_state & button_state::pressed) != 0;
         bool minus_was_pressed = (minus_previous_state & button_state::pressed) != 0;
@@ -142,40 +142,40 @@ static void buttons_thread(void*, void*, void*) {
         minus_previous_state    = minus_state;
 
 
-        if (report_plus_press || report_minus_press) {
-            auto state_to_kind = [](button_state state) {
-                switch (state) {
-                    case button_state::short_pressed: return button_press_kind::short_press;
-                    case button_state::long_pressed: return button_press_kind::long_press;
-                    case button_state::stuck: return button_press_kind::stuck;
-                    default: std::unreachable();
-                }
-            };
+        // if (report_plus_press || report_minus_press) {
+        //     auto state_to_kind = [](button_state state) {
+        //         switch (state) {
+        //             case button_state::short_pressed: return button_press_kind::short_press;
+        //             case button_state::long_pressed: return button_press_kind::long_press;
+        //             case button_state::stuck: return button_press_kind::stuck;
+        //             default: std::unreachable();
+        //         }
+        //     };
 
-            if (report_plus_press && report_minus_press) {
-                system_process_event(both_buttons_pressed{
-                    .plus  = {.kind = state_to_kind(plus_state), .press_duration = now - last_plus_press},
-                    .minus = {.kind = state_to_kind(minus_state), .press_duration = now - last_minus_press},
-                });
-            } else if (report_plus_press) {
-                system_process_event(plus_button_pressed{
-                    .kind           = state_to_kind(plus_state),
-                    .press_duration = now - last_plus_press,
-                });
-            } else {
-                system_process_event(minus_button_pressed{
-                    .kind           = state_to_kind(minus_state),
-                    .press_duration = now - last_minus_press,
-                });
-            }
-        }
+        // if (report_plus_press && report_minus_press) {
+        //     system_process_event(both_buttons_pressed{
+        //         .plus  = {.kind = state_to_kind(plus_state), .press_duration = now - last_plus_press},
+        //         .minus = {.kind = state_to_kind(minus_state), .press_duration = now - last_minus_press},
+        //     });
+        // } else if (report_plus_press) {
+        //     system_process_event(plus_button_pressed{
+        //         .kind           = state_to_kind(plus_state),
+        //         .press_duration = now - last_plus_press,
+        //     });
+        // } else {
+        //     system_process_event(minus_button_pressed{
+        //         .kind           = state_to_kind(minus_state),
+        //         .press_duration = now - last_minus_press,
+        //     });
+        // }
+        // }
 
 
-        bool no_activity = (button_state::released == plus_state) && (button_state::released == minus_state);
+        // bool no_activity = (button_state::released == plus_state) && (button_state::released == minus_state);
+        bool no_activity = true;
         auto next_update = (no_activity) ? K_FOREVER : K_MSEC(config::buttons_thread_report_interval.count());
         k_sem_take(&button_changed, next_update);
     }
-    std::unreachable();
 }
 
 SYS_INIT_NAMED(buttons, buttons_init, POST_KERNEL, BUTTONS_INITIALIZATION_PRIORITY);
@@ -183,18 +183,18 @@ SYS_INIT_NAMED(buttons, buttons_init, POST_KERNEL, BUTTONS_INITIALIZATION_PRIORI
 K_THREAD_DEFINE(buttons, config::buttons_thread_stack_size, buttons_thread, nullptr, nullptr, nullptr, config::buttons_thread_priority, 0, 0);
 
 
-auto enable_wake_from_buttons() noexcept -> std::expected<void, error_code> {
+void enable_wake_from_buttons() {
     int button_plus_result  = gpio_remove_callback(button_plus.port, &button_plus_on_change_callback);
     int button_minus_result = gpio_remove_callback(button_minus.port, &button_minus_on_change_callback);
 
     if ((button_plus_result < 0) || (button_minus_result < 0)) {
-        return std::unexpected(error_code{-ENOSYS});
+        // return std::unexpected(error_code{-ENOSYS});
     }
     button_plus_result  = gpio_pin_interrupt_configure_dt(&button_plus, GPIO_INT_LEVEL_ACTIVE);
     button_minus_result = gpio_pin_interrupt_configure_dt(&button_minus, GPIO_INT_LEVEL_ACTIVE);
 
     if ((button_plus_result < 0) || (button_minus_result < 0)) {
-        return std::unexpected(error_code{-ENOTSUP});
+        // return std::unexpected(error_code{-ENOTSUP});
     }
-    return {};
+    // return {};
 }

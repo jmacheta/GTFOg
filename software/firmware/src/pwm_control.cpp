@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <ranges>
 #include <stdexcept>
 #include <tuple>
 
@@ -47,7 +46,7 @@ void StatusLight::set_color(Color color) {
     auto blue_pulse  = pulse_width(color.blue, UINT8_MAX).count();
 
     // This is absolutely non critical code, so we can ignore the return value.
-    std::ignore = pwm_set_dt(&led_r, period, red_pulse);
+    std::ignore = pwm_set_dt(&led_r, led_r.period, red_pulse);
     std::ignore = pwm_set_dt(&led_g, period, green_pulse);
     std::ignore = pwm_set_dt(&led_b, period, blue_pulse);
 }
@@ -78,9 +77,7 @@ void StrobeLight::set_intensity(std::uint8_t value) {
     auto pulse = pulse_width(value, UINT8_MAX).count();
 
     // This is absolutely non critical code, so we can ignore the return value.
-
-
-    std::ignore = pwm_set_dt(&strobe, period, pulse);
+    std::ignore = pwm_set_dt(&strobe, strobe.period, pulse);
 }
 
 void StrobeLight::allow_output(bool allowed) {
@@ -96,7 +93,7 @@ StrobeLight& strobe_light_instance() noexcept {
 }
 
 
-auto Fan::set_speed(int percentage) noexcept -> std::expected<void, error_code> {
+void Fan::set_speed(int percentage) {
     static pwm_dt_spec const fan = PWM_DT_SPEC_GET(DT_NODELABEL(fan));
 
     percentage = std::clamp(percentage, 0, 100);
@@ -107,12 +104,10 @@ auto Fan::set_speed(int percentage) noexcept -> std::expected<void, error_code> 
     auto result = pwm_set_dt(&fan, period, fan_pulse);
 
     if (0 != result) {
-        return std::unexpected(error_code{result});
+        throw std::runtime_error{fmt::format("Fan PWM error: {}"_cf, result)};
     }
 
     current_speed = percentage;
-
-    return {};
 }
 
 

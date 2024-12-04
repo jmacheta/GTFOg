@@ -1,10 +1,6 @@
 #ifndef FAN_HPP_
 #define FAN_HPP_
 
-#include "error_codes.hpp"
-
-#include <expected>
-
 
 class Fan {
     int current_speed = 0;
@@ -19,12 +15,12 @@ class Fan {
      * If the requested value is < 0, the fan will be turned off.
      * @param[in] percentage The speed of the fan as a percentage.
      */
-    [[nodiscard]] auto set_speed(int percentage) noexcept -> std::expected<void, error_code>;
+    void set_speed(int percentage);
 
     /**
      * Turn the fan off.
      */
-    auto off() noexcept -> std::expected<void, error_code> {
+    auto off() {
         return set_speed(0);
     }
 
