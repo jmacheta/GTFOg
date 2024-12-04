@@ -119,8 +119,7 @@
 		compatible = "adi,adxl345";
 		reg = <0x53>;
 		status = "okay";
-		// supply-gpios = <&gpio1 9 0>;
-		// zephyr,deferred-init;
+		zephyr,deferred-init;
 	};
 };
 
