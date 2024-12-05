@@ -1,21 +1,24 @@
 #ifndef FAN_HPP_
 #define FAN_HPP_
-
+#include <cstdint>
 
 class Fan {
-    int current_speed = 0;
+    std::uint8_t min_speed{0};
+    std::uint8_t speed{0};
+    std::uint8_t max_speed{255};
 
   public:
     [[nodiscard]] constexpr auto get_speed() const noexcept {
-        return current_speed;
+        return speed;
     }
+
+
+    void set_limits(std::uint8_t min, std::uint8_t max = 255u);
+
     /**
-     * Set the fan speed.
-     * If the requested value is > 100, the fan will be set to 100%.
-     * If the requested value is < 0, the fan will be turned off.
      * @param[in] percentage The speed of the fan as a percentage.
      */
-    void set_speed(int percentage);
+    void set_speed(std::uint8_t percentage);
 
     /**
      * Turn the fan off.

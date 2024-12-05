@@ -1,5 +1,5 @@
-#ifndef STATUS_LIGHT_HPP_
-#define STATUS_LIGHT_HPP_
+#ifndef INDICATOR_HPP_
+#define INDICATOR_HPP_
 
 #include <cstdint>
 
@@ -24,7 +24,7 @@ namespace Colors {
 } // namespace Colors
 
 /// Status light control.
-class StatusLight {
+class Indicator {
     bool output_allowed{true};
 
   public:
@@ -59,14 +59,14 @@ class StatusLight {
 
 
   protected:
-    ~StatusLight() = default;
-    friend StatusLight& status_light_instance() noexcept;
+    ~Indicator() = default;
+    friend Indicator& indicator_instance() noexcept;
 };
 
 /**
  * Get the status light instance.
  * @return The status light instance.
  */
-[[nodiscard]] StatusLight& status_light_instance() noexcept;
+[[nodiscard]] Indicator& indicator_instance() noexcept;
 
 #endif

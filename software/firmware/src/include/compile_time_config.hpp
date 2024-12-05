@@ -6,7 +6,6 @@
 #include <chrono>
 
 
-
 #define NVS_INITIALIZATION_PRIORITY            20
 #define CHARGER_STATUS_INITIALIZATION_PRIORITY 30
 #define BUTTONS_INITIALIZATION_PRIORITY        10
@@ -35,11 +34,15 @@ namespace config {
 
 
     constexpr auto both_buttons_toggle_strobe = 2s;
-    constexpr auto both_buttons_power_off = 5s;
+    constexpr auto both_buttons_power_off     = 5s;
 
 
     constexpr SI::milli_volt_t<int64_t> battery_cutoff_voltage = 3300_mV;
 
+
+    constexpr auto strobe_thread_priority   = 5u;
+    constexpr auto strobe_thread_stack_size = 256u;
+    constexpr auto strobe_min_period        = 100ms;
 
 } // namespace config
 

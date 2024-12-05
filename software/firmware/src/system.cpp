@@ -8,10 +8,11 @@
 #include "fan.hpp"
 // #include "include/charger_status.hpp"
 #include "include/compile_time_config.hpp"
-#include "status_light.hpp"
-#include "strobe_light.hpp"
+#include "indicator.hpp"
+#include "strobe.hpp"
 
 #include <boost/sml.hpp>
+#include <fmt/core.h>
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/poweroff.h>
@@ -21,8 +22,10 @@
 #include <tuple>
 #include <utility>
 
-static auto& indicator = status_light_instance();
-static auto& strobe    = strobe_light_instance();
+
+
+static auto& indicator = indicator_instance();
+static auto& strobe    = strobe_instance();
 static auto& fan       = fan_instance();
 
 
@@ -100,10 +103,10 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
 
     if (wtf < 100) {
         printk("Increasing fan speed to %d\n", wtf);
-         fan.set_speed(wtf);
+        fan.set_speed(wtf);
     } else {
         wtf = 100;
-         fan.set_speed(wtf);
+        fan.set_speed(wtf);
 
         printk("Fan is already at maximum speed\n");
     }
@@ -114,10 +117,10 @@ static auto decrease_fan_speed = []() {
     wtf--;
     if (wtf > 0) {
         printk("Decreasing fan speed to %d\n", wtf);
-         fan.set_speed(wtf);
+        fan.set_speed(wtf);
     } else {
         wtf = 0;
-         fan.set_speed(wtf);
+        fan.set_speed(wtf);
 
 
         printk("Fan is already off\n");
@@ -126,20 +129,19 @@ static auto decrease_fan_speed = []() {
 
 static auto do_power_on = []() {
     indicator.set_color(Colors::Green);
+    fan.set_limits(50, 255);
     fan.set_speed(0);
-
-    printk("System powered on\n");
+    printk("Power on");
 };
 
 
 static auto do_toggle_strobe = []() {
     printk("Toggle strobe\n");
 
-    if (!strobe.is_output_allowed()) {
-        strobe.allow_output();
-        strobe.set_intensity(255);
+    if (!strobe.is_on()) {
+      strobe.on(255, 100ms);
     } else {
-        strobe.allow_output(false);
+        strobe.off();
     }
 
     k_msleep(1000);

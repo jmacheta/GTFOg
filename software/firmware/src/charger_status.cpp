@@ -42,7 +42,7 @@ static gpio_dt_spec const stat2 = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, charger_sta
 /* Data of ADC io-channels specified in devicetree. */
 static const adc_dt_spec adc_channels[] = {DT_FOREACH_PROP_ELEM(DT_NODELABEL(adc), io_channels, DT_SPEC_AND_COMMA)};
 
-// static_assert(std::size(adc_channel) == 1, "There should be exaclty one channel to measure battery voltage");
+// static_assert(std::size(adc_channel) == 1, "There should be exactly one channel to measure battery voltage");
 
 
 static charger_status get_charger_status() {
@@ -51,7 +51,7 @@ static charger_status get_charger_status() {
 
     // [[unlikely]] if (s1 < 0) { return std::unexpected(error_code{s1}); }
     // [[unlikely]] if (s2 < 0) { return std::unexpected(error_code{s2}); }
-printk("CS1: %d, CS2: %d\n", s1, s2);
+// printk("CS1: %d, CS2: %d\n", s1, s2);
     return charger_status{(s1 << 1) | s2};
 }
 

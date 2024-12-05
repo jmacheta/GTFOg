@@ -20,13 +20,13 @@ static int print_accels(const struct device* dev) {
     for (int i = 0; i < 3; i++) {
         ret = sensor_sample_fetch(dev);
         if (ret < 0) {
-            printf("%s: sensor_sample_fetch() failed: %d\n", dev->name, ret);
+            printk("%s: sensor_sample_fetch() failed: %d\n", dev->name, ret);
             return ret;
         }
 
         ret = sensor_channel_get(dev, channels[i], &accel[i]);
         if (ret < 0) {
-            printf("%s: sensor_channel_get(%c) failed: %d\n", dev->name, 'X' + i, ret);
+            printk("%s: sensor_channel_get(%c) failed: %d\n", dev->name, 'X' + i, ret);
             return ret;
         }
     }

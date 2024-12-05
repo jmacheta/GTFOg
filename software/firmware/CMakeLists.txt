@@ -5,6 +5,8 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(firmware)
 
+add_compile_options(-fmodules-ts)
+
 test_sysbuild()
 
 include(requirements.cmake)
