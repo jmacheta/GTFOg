@@ -3,11 +3,11 @@
 
 /dts-v1/;
 #include <nordic/nrf52833_qiaa.dtsi>
-
+#include "gtfog-pinctrl.dtsi"
 
 / {
 	model = "gtfog";
-	compatible = "agh,gtfog";
+	compatible = "jmacheta,gtfog";
 
 	chosen {
 		zephyr,sram = &sram0;
@@ -162,74 +162,17 @@
 		zephyr,input-positive = <NRF_SAADC_VDDHDIV5>; /* P0.30 */
 		zephyr,resolution = <12>;
 	};
-	
+
 	channel@4 {
 		reg = <4>;
 		zephyr,gain = "ADC_GAIN_1_6";
 		zephyr,reference = "ADC_REF_INTERNAL";
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,input-positive = <NRF_SAADC_AIN4>; /* P0.28 */
-		
+
 		zephyr,resolution = <12>;
 	};
 };
 
 
-
-
-
-&pinctrl {
-	pwm0_default: pwm0_default {
-		group1 {
-			psels = <NRF_PSEL(PWM_OUT3, 0, 11)>;
-		};
-
-		group2 {
-			psels = <NRF_PSEL(PWM_OUT0, 0, 31)>,
-			        <NRF_PSEL(PWM_OUT1, 0, 30)>,
-			        <NRF_PSEL(PWM_OUT2, 0, 29)>;
-			nordic,invert;
-		};
-	};
-
-	pwm0_sleep: pwm0_sleep {
-		group1 {
-			psels = <NRF_PSEL(PWM_OUT0, 0, 31)>,
-			        <NRF_PSEL(PWM_OUT1, 0, 30)>,
-			        <NRF_PSEL(PWM_OUT2, 0, 29)>,
-			        <NRF_PSEL(PWM_OUT3, 0, 11)>;
-			low-power-enable;
-
-		};
-	};
-
-	i2c0_default: i2c0_default {
-
-		group2 {
-			psels = <NRF_PSEL(TWIM_SCL, 0, 0)>, <NRF_PSEL(TWIM_SDA, 0, 1)>;
-			bias-pull-up;
-
-		};
-	};
-	i2c0_sleep: i2c0_sleep {
-		group1 {
-			psels = <NRF_PSEL(TWIM_SCL, 0, 0)>, <NRF_PSEL(TWIM_SDA, 0, 1)>;
-			bias-pull-up;
-			low-power-enable;
-		};
-	};
-
-	pwm1_default: pwm1_default {
-		group1 {
-			psels = <NRF_PSEL(PWM_OUT0, 0, 20)>;
-		};
-	};
-
-	pwm1_sleep: pwm1_sleep {
-		group1 {
-			psels = <NRF_PSEL(PWM_OUT0, 0, 20)>;
-			low-power-enable;
-		};
-	};
-};
 
