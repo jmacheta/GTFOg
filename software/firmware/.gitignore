@@ -7,3 +7,4 @@
 **/CMakeUserPresets.json
 boards
 **/.cache
+**/*.code-workspace

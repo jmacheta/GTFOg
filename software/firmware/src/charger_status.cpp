@@ -51,7 +51,7 @@ static charger_status get_charger_status() {
 
     // [[unlikely]] if (s1 < 0) { return std::unexpected(error_code{s1}); }
     // [[unlikely]] if (s2 < 0) { return std::unexpected(error_code{s2}); }
-
+printk("CS1: %d, CS2: %d\n", s1, s2);
     return charger_status{(s1 << 1) | s2};
 }
 
@@ -67,50 +67,50 @@ static int charger_status_thread(void) {
     [[unlikely]] if ((stat1_result < 0) || (stat2_result < 0)) { return -EINVAL; }
 
 
-    int err;
+    // int err;
+    while(1){
 
+    // /* Configure channels individually prior to sampling. */
+    // for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+    //     if (!adc_is_ready_dt(&adc_channels[i])) {
+    //         printk("ADC controller device %s not ready\n", adc_channels[i].dev->name);
+    //         return 0;
+    //     }
 
-    /* Configure channels individually prior to sampling. */
-    for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
-        if (!adc_is_ready_dt(&adc_channels[i])) {
-            printk("ADC controller device %s not ready\n", adc_channels[i].dev->name);
-            return 0;
-        }
-
-        err = adc_channel_setup_dt(&adc_channels[i]);
-        if (err < 0) {
-            printk("Could not setup channel #%d (%d)\n", i, err);
-            return 0;
-        }
-    }
-    int16_t            buf;
-    struct adc_sequence sequence = {
-        .buffer = &buf,
-        /* buffer size in bytes, not number of samples */
-        .buffer_size = sizeof(buf),
-        .calibrate = true
-    };
+    //     err = adc_channel_setup_dt(&adc_channels[i]);
+    //     if (err < 0) {
+    //         printk("Could not setup channel #%d (%d)\n", i, err);
+    //         return 0;
+    //     }
+    // }
+    // int16_t            buf;
+    // struct adc_sequence sequence = {
+    //     .buffer = &buf,
+    //     /* buffer size in bytes, not number of samples */
+    //     .buffer_size = sizeof(buf),
+    //     .calibrate = true
+    // };
 
     charger_status current_status = charger_status::off;
-    while (1) {
-        for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
-             buf = 0;
+    // while (1) {
+    //     for (size_t i = 0U; i < ARRAY_SIZE(adc_channels); i++) {
+    //          buf = 0;
 
-            printk("- %s, channel %d: ", adc_channels[i].dev->name, adc_channels[i].channel_id);
+    //         printk("- %s, channel %d: ", adc_channels[i].dev->name, adc_channels[i].channel_id);
 
-            (void)adc_sequence_init_dt(&adc_channels[i], &sequence);
+    //         (void)adc_sequence_init_dt(&adc_channels[i], &sequence);
 
-            err = adc_read_dt(&adc_channels[i], &sequence);
-            if (err < 0) {
-                printk("Could not read (%d)\n", err);
-                continue;
-            }
-           int32_t val_mv = static_cast<int32_t>(buf);
-            printk("%" PRId32, val_mv);
-            std::ignore = adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
-            printk(" = %" PRId32 " mV\n", val_mv);
-             k_sleep(K_MSEC(1000));
-        }
+    //         err = adc_read_dt(&adc_channels[i], &sequence);
+    //         if (err < 0) {
+    //             printk("Could not read (%d)\n", err);
+    //             continue;
+    //         }
+    //        int32_t val_mv = static_cast<int32_t>(buf);
+    //         printk("%" PRId32, val_mv);
+    //         std::ignore = adc_raw_to_millivolts_dt(&adc_channels[i], &val_mv);
+    //         printk(" = %" PRId32 " mV\n", val_mv);
+    //          k_sleep(K_MSEC(1000));
+    //     }
 
 
        
@@ -135,9 +135,9 @@ static int charger_status_thread(void) {
             // system_process_event(charger_status_changed{status});
         }
 
-        // printk("v_bat: %" PRId64 ", charger status: %d\n", v_batt.value(), static_cast<int>(status));
+        // printk(", charger status: %d\n",static_cast<int>(status));
 
-        k_sleep(K_MSEC(1000));
+        k_sleep(K_MSEC(50));
     }
     std::unreachable();
 }

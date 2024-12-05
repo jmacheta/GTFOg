@@ -5,13 +5,14 @@
 
 class StrobeLight {
     bool output_allowed{true};
+    std::uint8_t intensity{0};
 
   public:
     /**
      * Allow or disallow light output.
      * @param allowed True to allow output, false to disallow.
      */
-    void allow_output(bool allowed);
+    void allow_output(bool allowed = true);
 
     /**
      * Check if output is allowed.

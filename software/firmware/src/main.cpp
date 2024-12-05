@@ -5,11 +5,16 @@
 #include <hal/nrf_power.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
-
+#include <zephyr/usb/usb_device.h>
 
 int main(void) {
     system_process_event(events::power_on{});
 
+	int ret = usb_enable(NULL);
+	if (ret != 0) {
+		
+		return 0;
+	}
     // std::array strobe_intensities = {0, 1, 2, 4, 8, 16, 32, 64};
     while (1) {
         // for (auto i = 0; i < colors.size(); i++) {

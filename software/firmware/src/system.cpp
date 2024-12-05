@@ -7,7 +7,9 @@
 #include "compile_time_config.hpp"
 #include "fan.hpp"
 // #include "include/charger_status.hpp"
+#include "include/compile_time_config.hpp"
 #include "status_light.hpp"
+#include "strobe_light.hpp"
 
 #include <boost/sml.hpp>
 #include <zephyr/irq.h>
@@ -19,6 +21,10 @@
 #include <tuple>
 #include <utility>
 
+static auto& indicator = status_light_instance();
+static auto& strobe    = strobe_light_instance();
+static auto& fan       = fan_instance();
+
 
 auto uptime_clock::now() noexcept -> time_point {
     return time_point{duration{k_uptime_get()}};
@@ -28,20 +34,17 @@ auto uptime_clock::now() noexcept -> time_point {
 void system_power_off() noexcept {
     k_sched_lock();
 
-    std::ignore      = irq_lock();
-    auto& status_led = status_light_instance();
-    auto& fan        = fan_instance();
-
-    status_led.set_color(Colors::White);
+    std::ignore = irq_lock();
+    indicator.set_color(Colors::Cyan);
+    strobe.off();
     fan.set_speed(0);
 
     for (volatile int i = 0; i != 10000000; ++i) {
         // do nothing
     }
-    status_led.set_color(Colors::Black);
-
     enable_wake_from_buttons();
 
+    indicator.off();
     sys_poweroff();
 }
 
@@ -80,6 +83,12 @@ static auto hold_long_enough_for_power_off = [](both_buttons_pressed const& even
 
     return right_press_kind && right_press_duration;
 };
+static auto hold_long_enough_for_toggle_strobe = [](both_buttons_pressed const& event) {
+    bool right_press_kind     = (button_press_kind::long_press == event.plus.kind) && (button_press_kind::long_press == event.minus.kind);
+    bool right_press_duration = (event.plus.press_duration >= config::both_buttons_toggle_strobe) && (event.minus.press_duration >= config::both_buttons_toggle_strobe);
+
+    return right_press_kind && right_press_duration && !hold_long_enough_for_power_off(event);
+};
 
 
 auto        wtf                = 0;
@@ -87,16 +96,14 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
     unsigned change_rate = (event.press_duration / config::button_change_rate_threshold) + 1;
 
     change_rate = std::min(change_rate, config::button_max_change_rate);
-
-    auto& fan = fan_instance();
     wtf += change_rate;
 
     if (wtf < 100) {
         printk("Increasing fan speed to %d\n", wtf);
-        // std::ignore = fan.set_speed(wtf);
+         fan.set_speed(wtf);
     } else {
         wtf = 100;
-        // std::ignore = fan.set_speed(wtf);
+         fan.set_speed(wtf);
 
         printk("Fan is already at maximum speed\n");
     }
@@ -104,15 +111,13 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
 
 
 static auto decrease_fan_speed = []() {
-    auto& fan = fan_instance();
-
     wtf--;
     if (wtf > 0) {
         printk("Decreasing fan speed to %d\n", wtf);
-        // std::ignore = fan.set_speed(wtf);
+         fan.set_speed(wtf);
     } else {
         wtf = 0;
-        // std::ignore = fan.set_speed(wtf);
+         fan.set_speed(wtf);
 
 
         printk("Fan is already off\n");
@@ -120,13 +125,24 @@ static auto decrease_fan_speed = []() {
 };
 
 static auto do_power_on = []() {
-    auto& status_led = status_light_instance();
-    auto& fan        = fan_instance();
-
-    status_led.set_color(Colors::Green);
+    indicator.set_color(Colors::Green);
     fan.set_speed(0);
 
     printk("System powered on\n");
+};
+
+
+static auto do_toggle_strobe = []() {
+    printk("Toggle strobe\n");
+
+    if (!strobe.is_output_allowed()) {
+        strobe.allow_output();
+        strobe.set_intensity(255);
+    } else {
+        strobe.allow_output(false);
+    }
+
+    k_msleep(1000);
 };
 
 static auto do_power_off = []() { system_power_off(); };
@@ -148,9 +164,11 @@ struct system_state {
 
             "manual_mode"_s + event<plus_button_pressed> / increase_fan_speed,  //
             "manual_mode"_s + event<minus_button_pressed> / decrease_fan_speed, //
-            // "manual_mode"_s + event<minus_button_pressed> [hold_long_enough_for_power_off)] / do_power_off = X, //
+                                                                                // "manual_mode"_s + event<minus_button_pressed> [hold_long_enough_for_power_off)] / do_power_off = X, //
 
             // state<_> + event<charger_status_changed> / update_signaling_scheme,
+            state<_> + event<both_buttons_pressed>[hold_long_enough_for_toggle_strobe] / do_toggle_strobe, //
+
             state<_> + event<both_buttons_pressed>[hold_long_enough_for_power_off] / []() { system_power_off(); } = X //
         );
     }

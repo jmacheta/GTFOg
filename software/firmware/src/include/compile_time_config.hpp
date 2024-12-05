@@ -33,7 +33,9 @@ namespace config {
     constexpr auto button_change_rate_threshold = 3s;
     constexpr auto button_max_change_rate       = 5u;
 
-    constexpr auto both_buttons_power_off = 3s;
+
+    constexpr auto both_buttons_toggle_strobe = 2s;
+    constexpr auto both_buttons_power_off = 5s;
 
 
     constexpr SI::milli_volt_t<int64_t> battery_cutoff_voltage = 3300_mV;

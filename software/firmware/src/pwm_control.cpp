@@ -72,9 +72,10 @@ void StrobeLight::set_intensity(std::uint8_t value) {
         value = 0;
     }
 
-    auto period = pwm_period.count();
 
-    auto pulse = pulse_width(value, UINT8_MAX).count();
+    intensity = std::clamp(value, uint8_t{0}, uint8_t{255});
+    printf("period: %d\n", strobe.period);
+    auto pulse = value * strobe.period / 255;
 
     // This is absolutely non critical code, so we can ignore the return value.
     std::ignore = pwm_set_dt(&strobe, strobe.period, pulse);
@@ -98,10 +99,9 @@ void Fan::set_speed(int percentage) {
 
     percentage = std::clamp(percentage, 0, 100);
 
-    auto fan_pulse = pulse_width(percentage, 100).count();
-    auto period    = pwm_period.count();
+    auto fan_pulse = percentage * fan.period / 100;
 
-    auto result = pwm_set_dt(&fan, period, fan_pulse);
+    auto result = pwm_set_dt(&fan, fan.period, fan_pulse);
 
     if (0 != result) {
         throw std::runtime_error{fmt::format("Fan PWM error: {}"_cf, result)};
