@@ -19,8 +19,6 @@ template<typename T> void system_process_event(T event);
 
 [[noreturn]] void system_power_off() noexcept;
 
-[[noreturn]] void system_on_unrecoverable_error() noexcept;
-
 
 void enable_wake_from_buttons();
 

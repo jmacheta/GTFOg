@@ -6,8 +6,7 @@
 // #include "buttons.hpp"
 #include "compile_time_config.hpp"
 #include "fan.hpp"
-// #include "include/charger_status.hpp"
-#include "include/compile_time_config.hpp"
+
 #include "indicator.hpp"
 #include "strobe.hpp"
 
@@ -21,7 +20,6 @@
 #include <algorithm>
 #include <tuple>
 #include <utility>
-
 
 
 static auto& indicator = indicator_instance();
@@ -49,13 +47,6 @@ void system_power_off() noexcept {
 
     indicator.off();
     sys_poweroff();
-}
-
-
-void system_on_unrecoverable_error() noexcept {
-    printk("Unrecoverable error occurred; system will restart\n");
-    sys_reboot(SYS_REBOOT_WARM);
-    std::unreachable();
 }
 
 
@@ -102,52 +93,62 @@ static auto increase_fan_speed = [](plus_button_pressed const& event) {
     wtf += change_rate;
 
     if (wtf < 100) {
-        printk("Increasing fan speed to %d\n", wtf);
         fan.set_speed(wtf);
+        indicator.set_color(Colors::Green);
+        k_msleep(25);
     } else {
+        indicator.set_color(Colors::Magenta);
         wtf = 100;
         fan.set_speed(wtf);
-
-        printk("Fan is already at maximum speed\n");
+        k_msleep(10);
     }
+
+    indicator.set_color(Colors::Black);
 };
 
 
 static auto decrease_fan_speed = []() {
     wtf--;
     if (wtf > 0) {
-        printk("Decreasing fan speed to %d\n", wtf);
         fan.set_speed(wtf);
+        indicator.set_color(Colors::Yellow);
+        k_msleep(25);
     } else {
+        indicator.set_color(Colors::Magenta);
+
         wtf = 0;
         fan.set_speed(wtf);
-
-
-        printk("Fan is already off\n");
+        k_msleep(10);
     }
+        indicator.set_color(Colors::Black);
+
 };
 
-static auto do_power_on = []() {
-    indicator.set_color(Colors::Green);
+static auto indicator_startup_sequence() {
+    for (auto c : {Colors::Green, Colors::Green, Colors::Green}) {
+        indicator.set_color(c);
+        k_msleep(50);
+        indicator.set_color(Colors::Black);
+        k_msleep(50);
+    }
+}
+
+
+static auto power_on = []() {
+    indicator_startup_sequence();
     fan.set_limits(50, 255);
     fan.set_speed(0);
-    printk("Power on");
 };
 
 
-static auto do_toggle_strobe = []() {
-    printk("Toggle strobe\n");
-
+static auto toggle_strobe = []() {
     if (!strobe.is_on()) {
-      strobe.on(255, 100ms);
+        strobe.on(255, 100ms);
     } else {
         strobe.off();
     }
-
     k_msleep(1000);
 };
-
-static auto do_power_off = []() { system_power_off(); };
 
 
 // static auto update_signaling_scheme = [](charger_status_changed const& event) { printk("Charger status changed\n"); };
@@ -161,23 +162,22 @@ struct system_state {
          * Transition DSL: src_state + event [ guard ] / action = dst_state
          */
         return make_transition_table(
-            *"off"_s + event<power_on> / do_power_on = "on"_s,          //
-            "on"_s                                   = "manual_mode"_s, //
+            *"off"_s + event<request_power_on> / power_on = "on"_s,          //
+            "on"_s                                        = "manual_mode"_s, //
 
             "manual_mode"_s + event<plus_button_pressed> / increase_fan_speed,  //
             "manual_mode"_s + event<minus_button_pressed> / decrease_fan_speed, //
                                                                                 // "manual_mode"_s + event<minus_button_pressed> [hold_long_enough_for_power_off)] / do_power_off = X, //
 
             // state<_> + event<charger_status_changed> / update_signaling_scheme,
-            state<_> + event<both_buttons_pressed>[hold_long_enough_for_toggle_strobe] / do_toggle_strobe, //
-
+            state<_> + event<both_buttons_pressed>[hold_long_enough_for_toggle_strobe] / toggle_strobe,               //
             state<_> + event<both_buttons_pressed>[hold_long_enough_for_power_off] / []() { system_power_off(); } = X //
         );
     }
 };
 
-my_logger                                     logger;
-sml::sm<system_state, sml::logger<my_logger>> sm{
+static my_logger                                     logger;
+static sml::sm<system_state, sml::logger<my_logger>> sm{
     logger,
 };
 
@@ -190,7 +190,7 @@ template<typename T> void system_process_event(T event) {
     k_mutex_unlock(&fsm_mutex);
 }
 
-template void system_process_event(events::power_on);
+template void system_process_event(events::request_power_on);
 // template void system_process_event(events::charger_status_changed);
 template void system_process_event(events::plus_button_pressed);
 template void system_process_event(events::minus_button_pressed);

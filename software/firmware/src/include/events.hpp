@@ -37,7 +37,7 @@ namespace events {
         minus_button_pressed minus;
     };
 
-    struct power_on {};
+    struct request_power_on {};
 
     struct movement_update {
         unsigned movement_level;

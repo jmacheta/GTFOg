@@ -11,7 +11,7 @@
 
 
 int main(void) {
-    system_process_event(events::power_on{});
+    system_process_event(events::request_power_on{});
 
     std::ignore = usb_enable(NULL);
 
