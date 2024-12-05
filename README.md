@@ -1,4 +1,4 @@
-# GTFOg - Smart anti-fog system for Airsoft applications
+# GTfog - Smart anti-fog system for Airsoft applications
 
 Work in progress - please hold with PCB manufacturing until the tagged release is created.
 
