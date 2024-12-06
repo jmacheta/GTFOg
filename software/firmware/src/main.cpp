@@ -21,7 +21,7 @@ int main(void) {
     }
 }
 
-
+ 
 static int set_gpio_voltage(void) {
     if (nrf_power_mainregstatus_get(NRF_POWER) != NRF_POWER_MAINREGSTATUS_HIGH) {
         // Low power supply mode, do nothing
