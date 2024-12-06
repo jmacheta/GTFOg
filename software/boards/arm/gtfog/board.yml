@@ -1,0 +1,5 @@
+board:
+  name: gtfog
+  vendor: jmacheta
+  socs:
+  - name: nrf52833

@@ -1,0 +1,2 @@
+config BOARD_GTFOG
+	select SOC_NRF52833_QIAA
