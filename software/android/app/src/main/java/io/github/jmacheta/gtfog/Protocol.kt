@@ -116,16 +116,22 @@ class SampleRing(private val cap: Int) {
     }
 }
 
-/** Samples per second measured over windows of at least one second. */
+/**
+ * Samples per second. Samples come in frames, so windows start and end when a frame arrives
+ * (total changed) and span at least one second; otherwise 40-sample frames make the rate jump.
+ */
 class RateMeter {
     private var t0 = -1L
     private var c0 = 0L
+    private var last = 0L
     private var rate = 0.0
 
     fun update(nowMs: Long, total: Long): Double {
+        val arrived = total != last
+        last = total
         if (t0 < 0 || total < c0) {
             t0 = nowMs; c0 = total
-        } else if (nowMs - t0 >= 1000) {
+        } else if (arrived && nowMs - t0 >= 1000) {
             rate = (total - c0) * 1000.0 / (nowMs - t0)
             t0 = nowMs; c0 = total
         }

@@ -299,7 +299,7 @@ private fun AccelChart(ring: SampleRing, windowS: Int, rangeG: Double?, tick: Lo
         while (g <= r + 1e-9) {
             val y = yOf(g)
             drawLine(gridColor, Offset(left, y), Offset(size.width, y), 1f)
-            val label = measurer.measure(String.format(Locale.US, "%g", g), textStyle)
+            val label = measurer.measure(java.math.BigDecimal(g).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString(), textStyle)
             drawText(label, topLeft = Offset(left - label.size.width - 4.dp.toPx(), y - label.size.height / 2f))
             g += step
         }
@@ -307,7 +307,7 @@ private fun AccelChart(ring: SampleRing, windowS: Int, rangeG: Double?, tick: Lo
         for (t in 0..windowS step every) {
             val x = left + w - w * t / windowS
             drawLine(gridColor, Offset(x, 0f), Offset(x, h), 1f)
-            val label = measurer.measure("-${t}s", textStyle)
+            val label = measurer.measure(if (t == 0) "0 s" else "-$t s", textStyle)
             drawText(label, topLeft = Offset(x - label.size.width / 2f, h + 2.dp.toPx()))
         }
         val dx = w / (n - 1)

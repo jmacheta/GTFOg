@@ -84,6 +84,12 @@ class ProtocolTest {
         m.update(0, 0)
         assertEquals(0.0, m.update(500, 50), 0.0)
         assertEquals(100.0, m.update(1000, 100), 0.001)
+
+        // 40-sample frames every 400 ms, polled every 16 ms like the UI: steady 100/s, not 80 or 120.
+        val f = RateMeter()
+        var r = 0.0
+        for (t in 0L..10_000L step 16) r = f.update(t, t / 400 * 40)
+        assertEquals(100.0, r, 5.0)
     }
 
     @Test
