@@ -55,15 +55,22 @@ async def main(name):
         notified = asyncio.Queue()
         await client.start_notify(FAN, lambda _, data: notified.put_nowait(data[0]))
 
+        async def notified_value(expected):
+            # BlueZ may also deliver a stale cached value, so wait for the expected one.
+            try:
+                while (await asyncio.wait_for(notified.get(), 2)) != expected:
+                    pass
+                return True
+            except asyncio.TimeoutError:
+                return False
+
         for speed in (0, 1, 50, 100, 0):
+            while not notified.empty():
+                notified.get_nowait()
             await client.write_gatt_char(FAN, bytes([speed]), response=True)
             got = (await client.read_gatt_char(FAN))[0]
             check(got == speed, f"fan speed {speed} reads back (got {got})")
-            try:
-                note = await asyncio.wait_for(notified.get(), 2)
-                check(note == speed, f"fan speed {speed} notified (got {note})")
-            except asyncio.TimeoutError:
-                check(False, f"fan speed {speed} notified")
+            check(await notified_value(speed), f"fan speed {speed} notified")
         await client.stop_notify(FAN)
 
         check(await rejected(client, FAN, bytes([101])), "fan speed 101 is rejected")

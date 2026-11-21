@@ -84,7 +84,7 @@ the work is cancelled and the duty is 0.
 
 ## Status LED
 
-RGB LED on PWM0 channels 0..2 (inverted polarity, 1 ms period). `pattern_of` in `board.cpp` maps a signal to a color
+RGB LED on PWM0 channels 0..2 (inverted polarity, 5 ms period: the channels of one PWM instance share a period). `pattern_of` in `board.cpp` maps a signal to a color
 and blinks; a new signal replaces the running one.
 
 | Signal | Color | Blinks | On / off |

@@ -22,9 +22,9 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 
 | Signal | nRF pin | Peripheral | Notes |
 | --- | --- | --- | --- |
-| LED red | P0.31 | PWM0 out 0 | Inverted, 1 ms period |
-| LED green | P0.30 | PWM0 out 1 | Inverted, 1 ms period |
-| LED blue | P0.29 | PWM0 out 2 | Inverted, 1 ms period |
+| LED red | P0.31 | PWM0 out 0 | Inverted, 5 ms period |
+| LED green | P0.30 | PWM0 out 1 | Inverted, 5 ms period |
+| LED blue | P0.29 | PWM0 out 2 | Inverted, 5 ms period |
 | Fan | P0.11 | PWM0 out 3 | Normal polarity, 5 ms period |
 | Strobe | P0.20 | PWM1 out 0 | Normal polarity, 1 ms period |
 | I2C SCL | P0.00 | TWIM0 | Standard rate, pull-up |
