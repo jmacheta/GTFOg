@@ -127,6 +127,7 @@ and blinks; a new signal replaces the running one.
 ## Bluetooth LE
 
 Peripheral, device name `GTFOg`, one connection at a time (`CONFIG_BT_MAX_CONN=1`), ATT MTU 247, data length 251.
+GATT caching is on, so bonded phones get Service Changed and rediscover the database after a firmware update.
 Advertising data: flags and the control service UUID; the name is in the scan
 response. Advertising restarts after a disconnect.
 
