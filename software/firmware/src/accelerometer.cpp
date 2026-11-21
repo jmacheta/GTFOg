@@ -1,84 +1,47 @@
-#include "compile_time_config.hpp"
-#include "events.hpp"
-
+// Powers up the ADXL345 and logs its samples. Fan control from movement is not implemented yet.
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 
-static const device* accel = DEVICE_DT_GET(DT_NODELABEL(accelerometer));
+LOG_MODULE_REGISTER(accelerometer, LOG_LEVEL_INF);
 
-static const enum sensor_channel channels[] = {
-    SENSOR_CHAN_ACCEL_X,
-    SENSOR_CHAN_ACCEL_Y,
-    SENSOR_CHAN_ACCEL_Z,
-};
+namespace {
 
-static int print_accels(const struct device* dev) {
-    int                 ret;
-    struct sensor_value accel[3];
-    for (int i = 0; i < 3; i++) {
-        ret = sensor_sample_fetch(dev);
-        if (ret < 0) {
-            printk("%s: sensor_sample_fetch() failed: %d\n", dev->name, ret);
-            return ret;
-        }
+device const *const accel = DEVICE_DT_GET(DT_NODELABEL(accelerometer));
+gpio_dt_spec const power = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), accelerometer_pwr_gpios);
 
-        ret = sensor_channel_get(dev, channels[i], &accel[i]);
-        if (ret < 0) {
-            printk("%s: sensor_channel_get(%c) failed: %d\n", dev->name, 'X' + i, ret);
-            return ret;
-        }
-    }
-
-    printk("%16s [m/s^2]:    (%12.6f, %12.6f, %12.6f)\n", dev->name, sensor_value_to_double(&accel[0]), sensor_value_to_double(&accel[1]), sensor_value_to_double(&accel[2]));
-
-    return 0;
+auto power_up() -> int {
+  if(int err = gpio_pin_configure_dt(&power, GPIO_OUTPUT_INACTIVE); err != 0) {
+    return err;
+  }
+  k_msleep(100);
+  if(int err = gpio_pin_set_dt(&power, 1); err != 0) {
+    return err;
+  }
+  k_msleep(500);
+  if(int err = device_init(accel); err != 0) {
+    return err;
+  }
+  sensor_value odr{.val1 = 100, .val2 = 0};
+  return sensor_attr_set(accel, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
 }
 
-static int set_sampling_freq(const struct device* dev) {
-    int                 ret;
-    struct sensor_value odr;
-
-    ret = sensor_attr_get(dev, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
-
-    /* If we don't get a frequency > 0, we set one */
-    if (ret != 0 || (odr.val1 == 0 && odr.val2 == 0)) {
-        odr.val1 = 100;
-        odr.val2 = 0;
-
-        ret = sensor_attr_set(dev, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
-
-        if (ret != 0) {
-            printk("%s : failed to set sampling frequency %d\n", dev->name, ret);
-        }
+void accelerometer_thread(void *, void *, void *) {
+  if(int err = power_up(); err != 0) {
+    LOG_ERR("power up: %d", err);
+    return;
+  }
+  while(true) {
+    sensor_value xyz[3];
+    if(sensor_sample_fetch(accel) == 0 && sensor_channel_get(accel, SENSOR_CHAN_ACCEL_XYZ, xyz) == 0) {
+      LOG_DBG("%d.%06d %d.%06d %d.%06d m/s^2", xyz[0].val1, xyz[0].val2, xyz[1].val1, xyz[1].val2, xyz[2].val1, xyz[2].val2);
     }
-
-    return 0;
+    k_sleep(K_SECONDS(1));
+  }
 }
 
-#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
+K_THREAD_DEFINE(accelerometer, 1024, accelerometer_thread, nullptr, nullptr, nullptr, 10, 0, 100);
 
-
-static void accelerometer_thread(void*, void*, void*) {
-    gpio_dt_spec const pwr = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, accelerometer_pwr_gpios);
-    gpio_pin_configure_dt(&pwr, GPIO_OUTPUT);
-    gpio_pin_set_dt(&pwr, 0);
-    k_sleep(K_MSEC(100));
-
-    gpio_pin_set_dt(&pwr, 1);
-    k_sleep(K_MSEC(500));
-
-    device_init(accel);
-    if (!device_is_ready(accel)) {
-        printk("sensor: device %s not ready.\n", accel->name);
-        return;
-    }
-    set_sampling_freq(accel);
-    while (1) {
-        print_accels(accel);
-        k_sleep(K_MSEC(1000));
-    }
-}
-
-K_THREAD_DEFINE(accelerometer, config::accelerometer_thread_stack_size, accelerometer_thread, nullptr, nullptr, nullptr, config::accelerometer_thread_priority, 0, 100);
+} // namespace

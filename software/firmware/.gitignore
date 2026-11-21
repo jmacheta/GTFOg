@@ -1,8 +1,0 @@
-*.swp
-*~
-
-**/.vscode
-**/build*/
-**/CMakeUserPresets.json
-**/.cache
-**/*.code-workspace

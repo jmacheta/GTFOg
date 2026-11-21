@@ -1,0 +1,78 @@
+name: build
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Build firmware and run tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          path: GTFOg
+
+      # sdk-version "auto" takes the Zephyr SDK that the imported sdk-zephyr pins (1.0.1 for NCS v3.4.0).
+      - name: Set up nRF Connect SDK
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: GTFOg
+          toolchains: arm-zephyr-eabi
+          sdk-version: auto
+
+      # zephyr/module.yml adds software/ as a board root, so no -DBOARD_ROOT is needed.
+      - name: Build
+        run: west build -b gtfog -d build GTFOg/software/firmware
+
+      # The hardware-independent logic runs for real on the host.
+      - name: Run tests (twister, native_sim)
+        run: |
+          west twister \
+            --testsuite-root GTFOg/software/firmware/tests \
+            --platform native_sim/native/64 \
+            --inline-logs \
+            --outdir twister-out
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtfog-firmware
+          path: |
+            build/dfu_application.zip
+            build/firmware/zephyr/zephyr.signed.bin
+            build/firmware/zephyr/zephyr.signed.hex
+            build/mcuboot/zephyr/zephyr.hex
+          if-no-files-found: error
+
+      - name: Upload twister report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twister-report
+          path: |
+            twister-out/twister.xml
+            twister-out/twister.log
+          if-no-files-found: warn
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned, so CI and a developer's machine agree: versions differ in what they consider formatted.
+      - name: Install clang-format
+        run: pip install clang-format==21.1.8
+
+      - name: Check formatting
+        run: |
+          files=$(git ls-files software | grep -E '\.(c|h|cpp|hpp)$')
+          clang-format --dry-run --Werror $files
