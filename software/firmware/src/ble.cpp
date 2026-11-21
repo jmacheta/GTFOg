@@ -1,164 +1,143 @@
-/*
- * Copyright (c) 2022 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
- */
-
+// Bluetooth LE peripheral: the GTFOg control service, Battery Service and Device Information Service.
+#include "app.hpp"
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/bluetooth/uuid.h>
-#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
-#include <zephyr/sys/byteorder.h>
-#include <zephyr/sys/printk.h>
-#include <zephyr/types.h>
-#include "runtime_config.hpp"
-#include <errno.h>
-#include <stddef.h>
-#include <string.h>
 
-#define APP_GLUCOSE_MIN  88
-#define APP_GLUCOSE_MAX  92
-#define APP_GLUCOSE_STEP 0.1f
+#include <tuple>
+#include <utility>
 
-static bool session_state;
+LOG_MODULE_REGISTER(ble, LOG_LEVEL_INF);
 
+namespace {
 
-auto xd = BT_LE_ADV_CONN;
+#define GTFOG_UUID(n) BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xa7f00000 + (n), 0x5c1e, 0x4b8e, 0x9d2a, 0x6f0e1c3b4d50))
 
+bt_uuid_128 const service_uuid = GTFOG_UUID(1);
+bt_uuid_128 const fan_uuid = GTFOG_UUID(2);
+bt_uuid_128 const strobe_uuid = GTFOG_UUID(3);
 
-static const struct bt_data ad[] = {
-    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_CGMS_VAL), BT_UUID_16_ENCODE(BT_UUID_DIS_VAL)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+auto read_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
+  auto value = with_controller([](gtfog::controller &c) { return static_cast<std::uint8_t>(c.fan_speed()); });
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+}
+
+auto write_fan(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
+  if(offset != 0 || len != 1) {
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+  }
+  auto value = *static_cast<std::uint8_t const *>(buf);
+  if(value > 100) {
+    return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+  }
+  with_controller([&](gtfog::controller &c) { c.set_fan_speed(value); });
+  return len;
+}
+
+auto read_strobe(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
+  std::uint8_t value = with_controller([](gtfog::controller &c) { return c.strobe(); });
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+}
+
+auto write_strobe(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
+  if(offset != 0 || len != 1) {
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+  }
+  auto value = *static_cast<std::uint8_t const *>(buf);
+  if(value > 1) {
+    return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+  }
+  with_controller([&](gtfog::controller &c) { c.set_strobe(value != 0); });
+  return len;
+}
+
+constexpr auto rw_notify = BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY;
+constexpr auto encrypted = BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT;
+
+} // namespace
+
+BT_GATT_SERVICE_DEFINE(gtfog_service, BT_GATT_PRIMARY_SERVICE(&service_uuid),
+                       BT_GATT_CHARACTERISTIC(&fan_uuid.uuid, rw_notify, encrypted, read_fan, write_fan, nullptr),
+                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+                       BT_GATT_CHARACTERISTIC(&strobe_uuid.uuid, rw_notify, encrypted, read_strobe, write_strobe, nullptr),
+                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT), );
+
+namespace {
+
+// Attribute indices in gtfog_service: 0 service, 1 + 3k characteristic declaration, 2 + 3k value, 3 + 3k CCC.
+constexpr auto fan_value = 2;
+constexpr auto strobe_value = 5;
+
+std::uint8_t const flags[] = {BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR};
+std::uint8_t const service_uuid_bytes[] = {BT_UUID_128_ENCODE(0xa7f00001, 0x5c1e, 0x4b8e, 0x9d2a, 0x6f0e1c3b4d50)};
+
+bt_data const advertising[] = {
+    {BT_DATA_FLAGS, sizeof(flags), flags},
+    {BT_DATA_UUID128_ALL, sizeof(service_uuid_bytes), service_uuid_bytes},
+};
+bt_data const scan_response[] = {
+    {BT_DATA_NAME_COMPLETE, sizeof(CONFIG_BT_DEVICE_NAME) - 1, reinterpret_cast<std::uint8_t const *>(CONFIG_BT_DEVICE_NAME)},
 };
 
-static void connected(struct bt_conn* conn, uint8_t err) {
-    char addr[BT_ADDR_LE_STR_LEN];
+void start_advertising(k_work *) {
+  bt_le_adv_param param = BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, nullptr);
+  if(int err = bt_le_adv_start(&param, advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
+     err != 0 && err != -EALREADY) {
+    LOG_ERR("advertising: %d", err);
+  }
+}
+K_WORK_DEFINE(advertising_work, start_advertising);
 
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    if (err) {
-        printk("Failed to connect to %s (err 0x%02x)\n", addr, err);
-    } else {
-        printk("Connected %s\n", addr);
-    }
+void notify_state(k_work *) {
+  auto [fan, strobe] = with_controller([](gtfog::controller &c) { return std::pair<std::uint8_t, std::uint8_t>(c.fan_speed(), c.strobe()); });
+  // -ENOTCONN and friends only mean nobody listens.
+  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[fan_value], &fan, sizeof(fan));
+  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[strobe_value], &strobe, sizeof(strobe));
+}
+K_WORK_DEFINE(notify_work, notify_state);
+
+void connected(bt_conn *, std::uint8_t err) {
+  if(err != 0) {
+    LOG_WRN("connection failed: 0x%02x", err);
+  }
 }
 
-static void disconnected(struct bt_conn* conn, uint8_t reason) {
-    char addr[BT_ADDR_LE_STR_LEN];
+void disconnected(bt_conn *, std::uint8_t reason) { LOG_INF("disconnected: 0x%02x", reason); }
 
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    printk("Disconnected from %s (reason %u)\n", addr, reason);
-}
+void recycled() { k_work_submit(&advertising_work); }
 
-static void security_changed(struct bt_conn* conn, bt_security_t level, enum bt_security_err err) {
-    char addr[BT_ADDR_LE_STR_LEN];
+} // namespace
 
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    if (!err) {
-        printk("Security changed: %s level %u\n", addr, level);
-    } else {
-        printk("Security failed: %s level %u err %d\n", addr, level, err);
-    }
-}
-
-BT_CONN_CB_DEFINE(conn_callbacks) = {
-    .connected        = connected,
-    .disconnected     = disconnected,
-    .security_changed = security_changed,
+BT_CONN_CB_DEFINE(connection_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
+    .recycled = recycled,
 };
 
-static void auth_cancel(struct bt_conn* conn) {
-    char addr[BT_ADDR_LE_STR_LEN];
-
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-    printk("Pairing cancelled: %s\n", addr);
+auto ble_init() -> int {
+  if(int err = bt_enable(nullptr); err != 0) {
+    return err;
+  }
+  if(int err = settings_load(); err != 0) {
+    LOG_WRN("settings: %d", err);
+  }
+  k_work_submit(&advertising_work);
+  return 0;
 }
 
-static void auth_passkey_display(struct bt_conn* conn, unsigned int passkey) {
-    printk("Pairing key is %06d.\n", passkey);
+void ble_state_changed() {
+  if(bt_is_ready()) {
+    k_work_submit(&notify_work);
+  }
 }
 
-static struct bt_conn_auth_cb auth_cb_display = {
-    .passkey_display = auth_passkey_display,
-    .cancel          = auth_cancel,
-
-};
-
-static void cgms_session_state_changed(const bool state) {
-    session_state = state;
-    if (state) {
-        printk("Session starts.\n");
-    } else {
-        printk("Session stops.\n");
-    }
-}
-
-int mainxd(void) {
-    int           err;
-    const uint8_t measurement_interval = 1; /* time in minutes. */
-    /* The time it will try to submit a record if last attempt fails. */
-    const uint8_t retry_count = 3;
-    /* The time interval between two attempts. Unit is second. */
-    const uint8_t              retry_interval = 1;
-    float                      glucose        = APP_GLUCOSE_MIN;
-
-
-
-    bt_conn_auth_cb_register(&auth_cb_display);
-
-    err = bt_enable(NULL);
-    if (err) {
-        printk("Bluetooth init failed (err %d)\n", err);
-        return 0;
-    }
-
-    printk("Bluetooth initialized\n");
-
-    // if (IS_ENABLED(CONFIG_SETTINGS)) {
-        settings_load();
-    // }
-
-    err = bt_le_adv_start(xd, ad, ARRAY_SIZE(ad), NULL, 0);
-    if (err) {
-        printk("Advertising failed to start (err %d)\n", err);
-        return 0;
-    }
-
-    printk("Advertising successfully started\n");
-    
-    /* Submit the measured glucose result in main loop. */
-    while (1) {
-        if (session_state) {
-            /* Users can implement the routine that gets the glucose measurement.
-             * Here, we use dummy glucose results, which increase from APP_GLUCOSE_MIN
-             * to APP_GLUCOSE_MAX, with step of APP_GLUCOSE_STEP.
-             */
-            glucose += APP_GLUCOSE_STEP;
-            if (glucose > APP_GLUCOSE_MAX) {
-                glucose = APP_GLUCOSE_MIN;
-            }
-            // result.glucose = sfloat_from_float(glucose);
-
-            /* Check return value. If it is error code, which means submission
-             * to database fails, retry until it reaches limit.
-             */
-            for (int i = 0; i < retry_count; i++) {
-                // err = bt_cgms_measurement_add(result);
-                // if (err == 0) {
-                //     break;
-                // }
-                k_sleep(K_SECONDS(retry_interval));
-            }
-            if (err < 0) {
-                printk("Cannot submit measurement result. Record discarded.\n");
-            }
-        }
-        /* Sleep until next sampling time arrives. */
-        k_sleep(K_MINUTES(measurement_interval));
-    }
+void ble_battery_changed(std::uint8_t percent) {
+  if(bt_is_ready()) {
+    std::ignore = bt_bas_set_battery_level(percent);
+  }
 }
