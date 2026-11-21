@@ -63,6 +63,7 @@ void battery_thread(void *, void *, void *) {
         return c.battery_level();
       });
       ble_battery_changed(percent);
+      ble_charger_changed(status.charger);
     }
     k_sleep(sample_interval);
   }
