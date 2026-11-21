@@ -1,0 +1,4 @@
+name: gtfog
+build:
+  settings:
+    board_root: software

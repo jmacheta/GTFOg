@@ -1,5 +1,6 @@
 board:
   name: gtfog
+  full_name: GTFOg anti-fog fan controller
   vendor: jmacheta
   socs:
   - name: nrf52833

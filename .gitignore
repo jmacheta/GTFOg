@@ -6,3 +6,4 @@
 **/CMakeUserPresets.json
 **/.cache
 **/*.code-workspace
+/twister-out*/

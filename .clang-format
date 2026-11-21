@@ -1,0 +1,7 @@
+﻿---
+BasedOnStyle: LLVM
+ColumnLimit: "150"
+SpaceBeforeParens: Never
+RemoveSemicolon: true
+QualifierAlignment: Right
+InsertNewlineAtEOF: true
