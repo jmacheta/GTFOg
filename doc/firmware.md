@@ -147,6 +147,14 @@ chip through a reset.
   MCUboot installs the image.
 - Update: `dfu-util -d 1209:eacc,1209:eacd -a slot1_image -D build/firmware/zephyr/zephyr.signed.bin`.
 - The device is enabled on VBUS ready and disabled on VBUS removal.
+- The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older image, so bump it for
+  every release.
+- MCUboot status hooks (`software/firmware/mcuboot_hooks/`, linked into the MCUboot image by `sysbuild.cmake`): at
+  startup MCUboot turns the fan, the RGB LED and the strobe off; while it installs an update the red strobe blinks at
+  5 Hz (hardware PWM, 200 ms period) and stops before the application starts. Boards that only get USB updates keep
+  the MCUboot they shipped with; a new MCUboot needs SWD.
+- Linux access without root: `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="eac[cd]", MODE="0666"` in
+  `/etc/udev/rules.d/70-gtfog.rules`.
 
 ## Logging
 
@@ -157,6 +165,6 @@ rest at warning. Read it with a J-Link RTT client or `nrfutil`. The MCUboot log 
 
 - Accelerometer-driven fan control is not designed.
 - The charger STAT table and the VBAT divider need checking on a board.
-- The DFU flow is not tested on hardware.
-- BLE is not tested on hardware.
+- BLE: on the first board the radio transmits on the advertising channels (RADIO in TX, checked over SWD, also at
+  +8 dBm), but no host receives it. Suspect the RF path (antenna, matching) or the 32 MHz crystal, not the firmware.
 - Flash headroom is about 2 KB (see [hardware.md](hardware.md#flash-map)).

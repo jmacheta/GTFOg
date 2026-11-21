@@ -48,6 +48,9 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
   synthesized clock.
 - Power-off uses System OFF; the buttons wake the chip.
 - The charger and regulator parts are in `POWER.SchDoc`; their part numbers are not repeated here (see the BoM).
+- Rev 1.0 bug: on USB power alone the fan does not run. The 3.3 V high level on P0.11 is below the input-high threshold
+  of the fan driver. With a battery connected the charger pulls the supply down a little and the driver accepts the
+  signal. Bench-test the fan with a battery connected.
 
 ## Flash map
 

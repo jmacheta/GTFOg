@@ -15,6 +15,7 @@ int main() {
   if(int err = ble_init(); err != 0) {
     LOG_ERR("Bluetooth: %d", err);
   }
+  LOG_INF("started");
   return 0;
 }
 
