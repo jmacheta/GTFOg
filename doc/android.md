@@ -9,11 +9,15 @@ Compose `Canvas`.
 | Screen | Contents |
 | --- | --- |
 | Scan | LE scan filtered by the service UUID; name, address, RSSI; tap to connect. Asks for permissions and offers to enable Bluetooth |
-| Device | Connection state, battery %, charger state (text and raw number), model and manufacturer, fan slider 0..100 % with -/+ (step 5), strobe switch, Disconnect |
-| Accelerometer (on Device) | Live switch, scrolling x/y/z chart in g, window 5/10/30 s, Y range auto/±2/±4/±8/±16 g, legend, \|a\|, measured samples/s, lost frames |
-| Recording (on Device) | Record/Stop, file name, duration, sample count; list of recordings with Share and Delete |
+| Control (tab) | Battery icon drawn on a Canvas, filled to the level with the % beside it (bolt while charging; red with "!" and "Charger fault" on fault; grey outline when unknown), fan readout with slider and -5/+5, strobe switch, Mode (Manual; Motion disabled, coming soon) |
+| Settings (tab) | Stealth mode, Transport lock, Auto shutdown (Off, 5, 10, 15, 30, 60 min), model and manufacturer. Shows "Update the firmware to change settings" if the device lacks the settings characteristic |
+| Debug (tab) | Accelerometer, recording and the list of recordings below |
+| Accelerometer (Debug) | Live switch, scrolling x/y/z chart in g, window 5/10/30 s, Y range auto/±2/±4/±8/±16 g, legend, \|a\|, measured samples/s, lost frames |
+| Recording (Debug) | Record/Stop, file name, duration, sample count; list of recordings with Share and Delete |
 
-The slider writes on release, the buttons on press. Fan, strobe, charger and battery follow notifications. The chart redraws at about
+After connecting, the top bar keeps the device name, connection state and Disconnect; a bottom navigation bar switches the tabs. The app is dark-only.
+
+The slider writes on release, the buttons on press. Fan, strobe, charger and battery follow notifications. While a write to fan, strobe or settings is queued or in flight, notifications and reads of that characteristic are ignored, so quick taps on -5/+5 do not use stale values. The chart redraws at about
 30 fps from a 4096-sample ring buffer.
 
 ## Permissions
@@ -36,7 +40,8 @@ connecting.
 | `a7f00002-...` | Fan speed | u8 0..100 %; larger values give an ATT error | read, write, notify |
 | `a7f00003-...` | Strobe | u8 0/1 | read, write, notify |
 | `a7f00004-...` | Accelerometer | frame, below | notify; the stream runs only while notifications are on |
-| `a7f00005-...` | Charger state | u8: 0 not charging, 1 charging, 2 completed, 3 fault | read, notify |
+| `a7f00005-...` | Charger state | u8: 0 not charging (also charge done), 1 charging, 3 fault; 2 (completed) only from old firmware | read, notify |
+| `a7f00006-...` | Settings | 2 bytes: flags (bit 0 stealth, bit 1 transport lock), auto shutdown in minutes (0 = never); written whole on every change | read, write |
 | `0x2A19` (`0x180F`) | Battery level | u8 % | read, notify |
 | `0x2A24`, `0x2A29` (`0x180A`) | Model, manufacturer | string | read |
 
@@ -90,6 +95,5 @@ in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the sa
 ## Open items
 
 - TODO: firmware update over SMP (mcumgr service `8D53DC1D-1DB7-4CD3-868B-8A527460AA84`). Not implemented.
-- The charger state mapping is still being verified on the board; the app shows the raw number next to the text.
 - If the process is killed during a recording, the file stays valid up to the last flushed frame but the recording is not resumed.
 - Not tested on a phone yet; only build, unit tests and lint ran.

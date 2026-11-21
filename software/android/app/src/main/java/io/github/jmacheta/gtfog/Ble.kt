@@ -26,6 +26,8 @@ data class DeviceState(
     val fan: Int? = null,
     val strobe: Boolean? = null,
     val charger: Int? = null,
+    val settings: DeviceSettings? = null,
+    val hasSettings: Boolean = true,
     val model: String? = null,
     val manufacturer: String? = null,
     val live: Boolean = false,
@@ -59,6 +61,10 @@ class GtfogClient(
     private val queue = ArrayDeque<Op>()
     private var cur: Op? = null
 
+    // Writes queued or in flight per characteristic. While any exist, notifications and reads of that
+    // characteristic are ignored: they carry older values and would overwrite the newer optimistic one.
+    private val pendingWrites = HashMap<UUID, Int>()
+
     fun connect(d: BluetoothDevice, name: String) {
         disconnect()
         device = d
@@ -89,6 +95,11 @@ class GtfogClient(
         write(Uuids.STROBE, if (on) 1 else 0)
     }
 
+    fun setSettings(v: DeviceSettings) {
+        _state.update { it.copy(settings = v) }
+        write(Uuids.SETTINGS, v.encode())
+    }
+
     fun setLive(on: Boolean) {
         live = on
         _state.update { it.copy(live = on) }
@@ -103,6 +114,7 @@ class GtfogClient(
     private fun clearQueue() {
         queue.clear()
         cur = null
+        pendingWrites.clear()
     }
 
     private fun enqueue(run: () -> Boolean) {
@@ -138,13 +150,23 @@ class GtfogClient(
         enqueue { gatt?.readCharacteristic(c) == true }
     }
 
-    private fun write(u: UUID, v: Int) {
+    private fun write(u: UUID, v: Int) = write(u, byteArrayOf(v.toByte()))
+
+    private fun write(u: UUID, bytes: ByteArray) {
         val c = chars[u] ?: return
+        pendingWrites[u] = (pendingWrites[u] ?: 0) + 1
         enqueue {
-            c.value = byteArrayOf(v.toByte())
+            c.value = bytes
             c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            gatt?.writeCharacteristic(c) == true
+            val ok = gatt?.writeCharacteristic(c) == true
+            if (!ok) writeDone(u)
+            ok
         }
+    }
+
+    private fun writeDone(u: UUID) {
+        val n = (pendingWrites[u] ?: 0) - 1
+        if (n > 0) pendingWrites[u] = n else pendingWrites.remove(u)
     }
 
     private fun notify(u: UUID, on: Boolean) {
@@ -164,13 +186,19 @@ class GtfogClient(
         _state.update { it.copy(conn = Conn.Connected, error = null) }
         listOf(Uuids.FAN, Uuids.STROBE, Uuids.CHARGER, Uuids.BATTERY).forEach { notify(it, true) }
         if (live) notify(Uuids.ACCEL, true)
-        listOf(Uuids.BATTERY, Uuids.FAN, Uuids.STROBE, Uuids.CHARGER, Uuids.MODEL, Uuids.MANUFACTURER).forEach(::read)
+        _state.update { it.copy(hasSettings = Uuids.SETTINGS in chars) }
+        listOf(Uuids.BATTERY, Uuids.FAN, Uuids.STROBE, Uuids.CHARGER, Uuids.SETTINGS, Uuids.MODEL, Uuids.MANUFACTURER).forEach(::read)
         if (reconnected) onReconnect(System.currentTimeMillis())
     }
 
     private fun onValue(u: UUID, v: ByteArray) {
         if (u == Uuids.ACCEL) {
             parseAccelFrame(v)?.let { onFrame(System.currentTimeMillis(), it) }
+            return
+        }
+        if (pendingWrites.containsKey(u)) return
+        if (u == Uuids.SETTINGS) {
+            parseSettings(v)?.let { s -> _state.update { it.copy(settings = s) } }
             return
         }
         if (v.isEmpty()) return
@@ -231,6 +259,8 @@ class GtfogClient(
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             if (g !== gatt) return
+            val retry = (status == 5 || status == 15) && (cur?.tries ?: 6) < 6
+            if (!retry) writeDone(c.uuid)
             if (status != 0 && status != 5 && status != 15) read(c.uuid) // the device rejected it: show its value
             finish(status)
         }

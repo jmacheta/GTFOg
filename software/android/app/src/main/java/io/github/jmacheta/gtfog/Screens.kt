@@ -18,6 +18,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -135,35 +149,201 @@ fun ScanScreen(s: Session, st: DeviceState) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceScreen(s: Session, st: DeviceState) {
-    Column(
-        Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(st.name, style = MaterialTheme.typography.headlineSmall)
-                Text("${st.conn}  ${st.address}", style = MaterialTheme.typography.bodySmall)
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    Scaffold(
+        topBar = {
+            Row(Modifier.padding(16.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(st.name, style = MaterialTheme.typography.headlineSmall)
+                    Text("${st.conn}  ${st.address}", style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedButton({ s.disconnect() }) { Text("Disconnect") }
             }
-            OutlinedButton({ s.disconnect() }) { Text("Disconnect") }
-        }
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Battery: ${st.battery?.let { "$it %" } ?: "-"}")
-                Text("Charger: ${st.charger?.let { "${chargerText(it)} (raw $it)" } ?: "-"}")
-                Text("${st.manufacturer ?: "-"} / ${st.model ?: "-"}", style = MaterialTheme.typography.bodySmall)
+        },
+        bottomBar = {
+            NavigationBar(windowInsets = WindowInsets(0)) {
+                listOf("Control", "Settings", "Debug").forEachIndexed { i, n ->
+                    NavigationBarItem(tab == i, { tab = i }, { TabIcon(i) }, label = { Text(n) })
+                }
+            }
+        },
+        contentWindowInsets = WindowInsets(0),
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when (tab) {
+                0 -> ControlTab(s, st)
+                1 -> SettingsTab(s, st)
+                else -> {
+                    AccelCard(s, st)
+                    Recordings(s)
+                }
             }
         }
-        FanCard(s, st)
-        Card(Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Strobe", Modifier.weight(1f))
-                Switch(st.strobe == true, { s.client.setStrobe(it) }, enabled = st.strobe != null)
+    }
+}
+
+// Tiny Canvas icons so the app needs no icon library.
+@Composable
+private fun TabIcon(i: Int) {
+    val c = LocalContentColor.current
+    Canvas(Modifier.size(24.dp)) {
+        val st = Stroke(2.dp.toPx())
+        val w = size.width
+        when (i) {
+            0 -> { // fan: circle and a hub
+                drawCircle(c, w * 0.42f, style = st)
+                drawCircle(c, w * 0.1f)
+            }
+            1 -> { // sliders
+                for (k in 0..2) {
+                    val y = w * (0.2f + 0.3f * k)
+                    drawLine(c, Offset(w * 0.1f, y), Offset(w * 0.9f, y), 2.dp.toPx())
+                    drawCircle(c, w * 0.1f, Offset(w * (0.3f + 0.2f * k), y))
+                }
+            }
+            else -> { // waveform
+                val p = Path()
+                p.moveTo(w * 0.05f, w * 0.5f)
+                p.lineTo(w * 0.3f, w * 0.15f); p.lineTo(w * 0.55f, w * 0.85f); p.lineTo(w * 0.95f, w * 0.4f)
+                drawPath(p, c, style = st)
             }
         }
-        AccelCard(s, st)
-        Recordings(s)
+    }
+}
+
+@Composable
+private fun ControlTab(s: Session, st: DeviceState) {
+    BatteryWidget(st.battery, st.charger)
+    FanCard(s, st)
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Strobe", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            Switch(st.strobe == true, { s.client.setStrobe(it) }, enabled = st.strobe != null)
+        }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Mode", style = MaterialTheme.typography.titleLarge)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Manual") }
+                SegmentedButton(false, {}, SegmentedButtonDefaults.itemShape(1, 2), enabled = false) { Text("Motion") }
+            }
+            Text("Motion: coming soon", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private val GREEN = Color(0xFF43A047)
+private val RED = Color(0xFFE53935)
+
+@Composable
+private fun BatteryWidget(level: Int?, charger: Int?) {
+    val fault = charger == 3
+    val grey = MaterialTheme.colorScheme.outline
+    val fg = MaterialTheme.colorScheme.onSurface
+    val color = when {
+        fault -> RED
+        level == null -> grey
+        level <= 15 -> RED
+        else -> GREEN
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Canvas(Modifier.size(96.dp, 48.dp)) {
+                val tip = size.width * 0.07f
+                val bw = size.width - tip
+                val sw = 3.dp.toPx()
+                drawRoundRect(color, Offset(sw / 2, sw / 2), Size(bw - sw, size.height - sw), CornerRadius(6.dp.toPx()), Stroke(sw))
+                drawRect(color, Offset(bw, size.height * 0.3f), Size(tip, size.height * 0.4f))
+                if (level != null && !fault) {
+                    val f = level.coerceIn(0, 100) / 100f
+                    val inset = sw + 2.dp.toPx()
+                    drawRect(color, Offset(inset, inset), Size((bw - 2 * inset) * f, size.height - 2 * inset))
+                }
+                if (fault || charger == 1) {
+                    val cx = bw / 2
+                    val h = size.height
+                    val sym = if (fault) Color.White else Color.Black
+                    if (fault) {
+                        drawRoundRect(Color.Black, Offset(cx - 4.dp.toPx(), h * 0.2f), Size(8.dp.toPx(), h * 0.38f), CornerRadius(2.dp.toPx()))
+                        drawCircle(Color.Black, 4.dp.toPx(), Offset(cx, h * 0.76f))
+                        drawRoundRect(sym, Offset(cx - 2.5.dp.toPx(), h * 0.24f), Size(5.dp.toPx(), h * 0.3f), CornerRadius(2.dp.toPx()))
+                        drawCircle(sym, 2.5.dp.toPx(), Offset(cx, h * 0.76f))
+                    } else {
+                        val p = Path()
+                        p.moveTo(cx + 3.dp.toPx(), h * 0.1f)
+                        p.lineTo(cx - 9.dp.toPx(), h * 0.55f); p.lineTo(cx - 1.dp.toPx(), h * 0.55f)
+                        p.lineTo(cx - 3.dp.toPx(), h * 0.9f)
+                        p.lineTo(cx + 9.dp.toPx(), h * 0.43f); p.lineTo(cx + 1.dp.toPx(), h * 0.43f)
+                        p.close()
+                        drawPath(p, Color.White)
+                        drawPath(p, Color.Black, style = Stroke(1.5.dp.toPx()))
+                    }
+                }
+            }
+            Column {
+                Text(level?.let { "$it %" } ?: "-", style = MaterialTheme.typography.displaySmall, color = fg)
+                when {
+                    fault -> Text("Charger fault", color = RED, style = MaterialTheme.typography.titleMedium)
+                    charger == 1 -> Text("Charging", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsTab(s: Session, st: DeviceState) {
+    val cur = st.settings
+    val ok = st.hasSettings && cur != null
+    if (!st.hasSettings) Text("Update the firmware to change settings", color = MaterialTheme.colorScheme.error)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SettingSwitch("Stealth mode", "Status LED never lights up", cur?.stealth == true, ok) {
+                cur?.let { c -> s.client.setSettings(c.copy(stealth = it)) }
+            }
+            SettingSwitch("Transport lock", "Buttons only wake the device; fan and strobe stay off", cur?.transportLock == true, ok) {
+                cur?.let { c -> s.client.setSettings(c.copy(transportLock = it)) }
+            }
+            Column {
+                Text("Auto shutdown", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Power off after this long with the fan and strobe off and no phone connected",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AUTO_OFF.forEach { m ->
+                        FilterChip(cur?.autoOffMin == m, { cur?.let { s.client.setSettings(it.copy(autoOffMin = m)) } }, { Text(if (m == 0) "Off" else "$m min") }, enabled = ok)
+                    }
+                }
+            }
+        }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Device", style = MaterialTheme.typography.titleMedium)
+            Text("Manufacturer: ${st.manufacturer ?: "-"}")
+            Text("Model: ${st.model ?: "-"}")
+        }
+    }
+}
+
+private val AUTO_OFF = listOf(0, 5, 10, 15, 30, 60)
+
+@Composable
+private fun SettingSwitch(title: String, subtitle: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(on, onChange, enabled = enabled)
     }
 }
 
@@ -174,9 +354,10 @@ private fun FanCard(s: Session, st: DeviceState) {
     val enabled = st.fan != null
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text("Fan speed: ${shown.roundToInt()} %")
+            Text("Fan", style = MaterialTheme.typography.titleLarge)
+            Text("${shown.roundToInt()} %", Modifier.fillMaxWidth(), style = MaterialTheme.typography.displayLarge, textAlign = TextAlign.Center)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton({ s.client.setFan(((st.fan ?: 0) - 5).coerceAtLeast(0)) }, enabled = enabled) { Text("-") }
+                FilledTonalButton({ s.client.setFan(((st.fan ?: 0) - 5).coerceAtLeast(0)) }, enabled = enabled) { Text("-5", style = MaterialTheme.typography.titleLarge) }
                 Slider(
                     value = shown,
                     onValueChange = { drag = it },
@@ -185,7 +366,7 @@ private fun FanCard(s: Session, st: DeviceState) {
                     enabled = enabled,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )
-                OutlinedButton({ s.client.setFan(((st.fan ?: 0) + 5).coerceAtMost(100)) }, enabled = enabled) { Text("+") }
+                FilledTonalButton({ s.client.setFan(((st.fan ?: 0) + 5).coerceAtMost(100)) }, enabled = enabled) { Text("+5", style = MaterialTheme.typography.titleLarge) }
             }
         }
     }

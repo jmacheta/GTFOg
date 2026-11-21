@@ -1,5 +1,6 @@
 package io.github.jmacheta.gtfog
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -62,6 +63,8 @@ class ProtocolTest {
     @Test
     fun chargerMapping() {
         assertEquals("Charging", chargerText(1))
+        assertEquals("Not charging", chargerText(0))
+        assertEquals("Charge complete", chargerText(2))
         assertEquals("Fault", chargerText(3))
         assertEquals("Unknown", chargerText(9))
     }
@@ -99,5 +102,20 @@ class ProtocolTest {
         assertEquals(16.0, autoRangeG(30.0), 0.0)
         assertEquals(1.0, magnitudeG(Sample(0, 1000, 0)), 1e-9)
         assertEquals("1:02:03", formatDuration(3723000))
+    }
+
+    @Test
+    fun settingsRoundTrip() {
+        assertArrayEquals(byteArrayOf(3, 30), DeviceSettings(true, true, 30).encode())
+        assertArrayEquals(byteArrayOf(2, 0), DeviceSettings(false, true, 0).encode())
+        assertEquals(DeviceSettings(true, false, 5), parseSettings(byteArrayOf(1, 5)))
+        assertEquals(DeviceSettings(false, true, 60), parseSettings(byteArrayOf(2, 60)))
+    }
+
+    @Test
+    fun settingsRejectWrongSize() {
+        assertNull(parseSettings(byteArrayOf()))
+        assertNull(parseSettings(byteArrayOf(1)))
+        assertNull(parseSettings(byteArrayOf(1, 2, 3)))
     }
 }

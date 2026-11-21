@@ -11,7 +11,7 @@ namespace {
 
 // ponytail: VBAT reaches AIN4 through a 47k/47k divider (POWER sheet); calibrate against a multimeter.
 constexpr int vbat_divider = 2;
-constexpr auto sample_interval = K_SECONDS(10);
+constexpr unsigned sample_interval_s = 10; // Also the auto-off resolution.
 
 adc_dt_spec const vbat = ADC_DT_SPEC_GET_BY_NAME(DT_NODELABEL(adc), vbat);
 gpio_dt_spec const stat1 = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), charger_stat1_gpios);
@@ -60,12 +60,13 @@ void battery_thread(void *, void *, void *) {
       LOG_DBG("%d mV, charger %d", millivolts, static_cast<int>(status.charger));
       auto percent = with_controller([&](gtfog::controller &c) {
         c.handle(status);
+        c.elapsed(sample_interval_s, ble_connected());
         return c.battery_level();
       });
       ble_battery_changed(percent);
       ble_charger_changed(status.charger);
     }
-    k_sleep(sample_interval);
+    k_sleep(K_SECONDS(sample_interval_s));
   }
 }
 

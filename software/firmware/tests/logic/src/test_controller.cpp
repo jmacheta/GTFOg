@@ -109,3 +109,71 @@ ZTEST(controller, test_fan_duty_curve) {
     previous = fan_duty_permille(p, 200);
   }
 }
+
+ZTEST(controller, test_stealth_shows_nothing) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.stealth = true});
+  c.power_on();
+  c.handle(button_event{button_action::plus, 1});
+  c.handle(button_event{button_action::power_off});
+  zassert_true(out.signals.empty());
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_transport_lock_keeps_fan_and_strobe_off) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.transport_lock = true});
+  c.power_on();
+  c.handle(button_event{button_action::plus, 5});
+  c.handle(button_event{button_action::toggle_strobe});
+  zassert_equal(out.fan, 0);
+  zassert_false(out.strobe);
+  zassert_equal(out.signals.back(), signal::locked);
+  c.set_fan_speed(40); // The phone still controls the device.
+  zassert_equal(out.fan, 40);
+  c.handle(button_event{button_action::power_off});
+  zassert_true(out.powered_off);
+  zassert_equal(out.signals.back(), signal::power_off);
+}
+
+ZTEST(controller, test_auto_off_after_idle_time) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.auto_off_minutes = 1});
+  c.power_on();
+  c.elapsed(50, false);
+  c.handle(button_event{button_action::minus, 1}); // A button press restarts the count.
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, true); // A connected phone keeps it on.
+  c.set_fan_speed(10);
+  c.elapsed(120, false); // So does a running fan.
+  zassert_false(out.powered_off);
+  c.set_fan_speed(0);
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, false);
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_auto_off_disabled) {
+  fake_outputs out;
+  controller c{out};
+  c.power_on();
+  c.elapsed(1'000'000, false);
+  zassert_false(out.powered_off);
+}
+
+ZTEST(controller, test_settings_encoding) {
+  device_settings s{.stealth = true, .transport_lock = true, .auto_off_minutes = 15};
+  auto bytes = encode(s);
+  zassert_equal(bytes[0], 3);
+  zassert_equal(bytes[1], 15);
+  zassert_true(decode_settings(bytes) == s);
+  std::uint8_t const unknown_flag[] = {4, 0};
+  std::uint8_t const too_short[] = {1};
+  zassert_false(decode_settings(unknown_flag).has_value());
+  zassert_false(decode_settings(too_short).has_value());
+}

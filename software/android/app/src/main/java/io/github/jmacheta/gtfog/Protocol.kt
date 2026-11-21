@@ -11,6 +11,7 @@ object Uuids {
     val STROBE: UUID = UUID.fromString("a7f00003-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val ACCEL: UUID = UUID.fromString("a7f00004-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val CHARGER: UUID = UUID.fromString("a7f00005-5c1e-4b8e-9d2a-6f0e1c3b4d50")
+    val SETTINGS: UUID = UUID.fromString("a7f00006-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val BATTERY: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
     val MODEL: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
     val MANUFACTURER: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
@@ -42,10 +43,19 @@ fun magnitudeG(s: Sample): Double =
 fun chargerText(raw: Int): String = when (raw) {
     0 -> "Not charging"
     1 -> "Charging"
-    2 -> "Charge completed"
+    2 -> "Charge complete" // old firmware only
     3 -> "Fault"
     else -> "Unknown"
 }
+
+/** Settings stored on the device: byte 0 flags (bit 0 stealth, bit 1 transport lock), byte 1 auto shutdown in minutes (0 = never). */
+data class DeviceSettings(val stealth: Boolean, val transportLock: Boolean, val autoOffMin: Int) {
+    fun encode(): ByteArray =
+        byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0)).toByte(), autoOffMin.coerceIn(0, 255).toByte())
+}
+
+fun parseSettings(b: ByteArray): DeviceSettings? =
+    if (b.size != 2) null else DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1))
 
 /** Counts frames and frames missing between consecutive sequence numbers (u16, wrapping). */
 class SeqTracker {

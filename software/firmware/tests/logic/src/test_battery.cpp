@@ -25,10 +25,10 @@ ZTEST(battery, test_percentage_interpolates) {
 }
 
 ZTEST(battery, test_charger_states) {
-  zassert_equal(decode_charger_state(false, false), charger_state::not_charging);
+  zassert_equal(decode_charger_state(true, true), charger_state::not_charging);
   zassert_equal(decode_charger_state(true, false), charger_state::charging);
-  zassert_equal(decode_charger_state(true, true), charger_state::charge_completed);
   zassert_equal(decode_charger_state(false, true), charger_state::fault);
+  zassert_equal(decode_charger_state(false, false), charger_state::fault);
 }
 
 ZTEST(battery, test_guard_needs_consecutive_low_samples) {

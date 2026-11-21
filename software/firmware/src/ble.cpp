@@ -10,7 +10,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
+#include <array>
 #include <atomic>
+#include <cstring>
 #include <tuple>
 #include <utility>
 
@@ -25,6 +27,8 @@ bt_uuid_128 const fan_uuid = GTFOG_UUID(2);
 bt_uuid_128 const strobe_uuid = GTFOG_UUID(3);
 bt_uuid_128 const accel_uuid = GTFOG_UUID(4);
 bt_uuid_128 const charger_uuid = GTFOG_UUID(5);
+bt_uuid_128 const settings_uuid = GTFOG_UUID(6);
+constexpr char settings_key[] = "gtfog/cfg";
 
 std::atomic<std::uint8_t> charger{0};
 bt_conn *current_conn; // ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1).
@@ -68,6 +72,35 @@ auto read_charger(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint1
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
+auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
+  auto value = gtfog::encode(with_controller([](gtfog::controller &c) { return c.settings(); }));
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value.data(), value.size());
+}
+
+auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
+  auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len});
+  if(offset != 0 || !settings) {
+    return BT_GATT_ERR(len != gtfog::settings_size ? BT_ATT_ERR_INVALID_ATTRIBUTE_LEN : BT_ATT_ERR_VALUE_NOT_ALLOWED);
+  }
+  with_controller([&](gtfog::controller &c) { c.configure(*settings); });
+  if(int err = settings_save_one(settings_key, buf, len); err != 0) {
+    LOG_ERR("save settings: %d", err);
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+  }
+  return len;
+}
+
+auto load_settings(char const *key, std::size_t len, settings_read_cb read, void *arg) -> int {
+  std::array<std::uint8_t, gtfog::settings_size> bytes{};
+  if(std::strcmp(key, "cfg") != 0 || len != bytes.size() || read(arg, bytes.data(), bytes.size()) != static_cast<ssize_t>(bytes.size())) {
+    return 0; // Unknown or damaged entries keep the defaults.
+  }
+  if(auto settings = gtfog::decode_settings(bytes)) {
+    with_controller([&](gtfog::controller &c) { c.configure(*settings); });
+  }
+  return 0;
+}
+
 void accel_subscribed(bt_gatt_attr const *, std::uint16_t value) { accelerometer_stream(value == BT_GATT_CCC_NOTIFY); }
 
 constexpr auto rw_notify = BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY;
@@ -75,16 +108,18 @@ constexpr auto encrypted = BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYP
 
 } // namespace
 
-BT_GATT_SERVICE_DEFINE(gtfog_service, BT_GATT_PRIMARY_SERVICE(&service_uuid),
-                       BT_GATT_CHARACTERISTIC(&fan_uuid.uuid, rw_notify, encrypted, read_fan, write_fan, nullptr),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-                       BT_GATT_CHARACTERISTIC(&strobe_uuid.uuid, rw_notify, encrypted, read_strobe, write_strobe, nullptr),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-                       BT_GATT_CHARACTERISTIC(&accel_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, nullptr, nullptr, nullptr),
-                       BT_GATT_CCC(accel_subscribed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-                       BT_GATT_CHARACTERISTIC(&charger_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ_ENCRYPT, read_charger,
-                                              nullptr, nullptr),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT), );
+BT_GATT_SERVICE_DEFINE(
+    gtfog_service, BT_GATT_PRIMARY_SERVICE(&service_uuid), BT_GATT_CHARACTERISTIC(&fan_uuid.uuid, rw_notify, encrypted, read_fan, write_fan, nullptr),
+    BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+    BT_GATT_CHARACTERISTIC(&strobe_uuid.uuid, rw_notify, encrypted, read_strobe, write_strobe, nullptr),
+    BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+    BT_GATT_CHARACTERISTIC(&accel_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, nullptr, nullptr, nullptr),
+    BT_GATT_CCC(accel_subscribed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+    BT_GATT_CHARACTERISTIC(&charger_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ_ENCRYPT, read_charger, nullptr, nullptr),
+    BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+    BT_GATT_CHARACTERISTIC(&settings_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE, encrypted, read_settings, write_settings, nullptr), );
+
+SETTINGS_STATIC_HANDLER_DEFINE(gtfog, "gtfog", nullptr, load_settings, nullptr, nullptr);
 
 namespace {
 
@@ -159,6 +194,8 @@ auto ble_init() -> int {
   k_work_submit(&advertising_work);
   return 0;
 }
+
+auto ble_connected() -> bool { return current_conn != nullptr; }
 
 void ble_state_changed() {
   if(bt_is_ready()) {

@@ -55,6 +55,10 @@ constexpr auto pattern_of(signal s) noexcept -> pattern {
     return {magenta, 1, 50, 0};
   case signal::low_battery:
     return {red, 3, 200, 200};
+  case signal::locked:
+    return {red, 1, 50, 0};
+  case signal::power_off:
+    return {cyan, 1, 300, 0};
   }
   return {black, 0, 0, 0};
 }
@@ -129,15 +133,13 @@ public:
 
   void power_off() override {
     LOG_INF("power off");
-    // Let a running pattern (the low battery warning) finish first.
+    // Let the last pattern (power off or low battery) finish first.
     for(int waited_ms = 0; waited_ms < 2000 && pattern_phase < 2 * current_pattern.blinks; waited_ms += 10) {
       k_msleep(10);
     }
     k_work_cancel_delayable(&indicator_work);
-    set_color(cyan);
-    buttons_arm_wake();
-    k_msleep(300);
     set_color(black);
+    buttons_arm_wake();
     sys_poweroff();
   }
 };

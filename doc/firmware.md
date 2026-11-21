@@ -41,18 +41,31 @@ The strobe, the LED patterns, BLE notifications, advertising restart run on the 
 
 ## Controller
 
-`controller` (`src/logic/controller.cpp`) holds the fan speed (0..100 %), the strobe state and the battery percentage,
-and drives an `outputs` object.
+`controller` (`src/logic/controller.cpp`) holds the fan speed (0..100 %), the strobe state, the battery percentage and
+the `device_settings`, and drives an `outputs` object. Signals go to `outputs::show()` only when stealth mode is off.
 
 | Input | Effect |
 | --- | --- |
 | `power_on()` | Signal `power_on`, fan 0, strobe off |
+| Any button while `transport_lock` is on | Signal `locked`, nothing else; only `power_off` still works |
 | Button `plus` / `minus` | Fan speed `+steps` / `-steps`, clamped to 0..100; signal `speed_up`, `speed_down`, or `speed_limit` when the result reaches 0 or 100 |
 | Button `toggle_strobe` | Strobe on or off |
-| Button `power_off` | Strobe off, fan 0, `outputs::power_off()` |
+| Button `power_off` | Strobe off, fan 0, signal `power_off`, `outputs::power_off()` |
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
-| `battery_status` | Stores the percentage; when `battery_guard` fires: signal `low_battery`, then the same as `power_off` |
+| `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off |
+| `elapsed(seconds, phone_connected)` (every 10 s) | Counts idle time: fan 0, strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off` |
+| `configure(settings)` (BLE, flash) | Stores the settings |
+
+### Settings
+
+`device_settings`, written over BLE and kept in flash under the settings key `gtfog/cfg` (loaded before `power_on()`, so
+stealth mode also hides the power-on signal). Two bytes (`encode`, `decode_settings`):
+
+| Byte | Contents |
+| --- | --- |
+| 0 | Flags: bit 0 stealth (the status LED never lights up), bit 1 transport lock (buttons only wake and power off); other bits must be 0 |
+| 1 | Auto-off in minutes, 0 = never |
 
 ## Buttons
 
@@ -94,18 +107,20 @@ and blinks; a new signal replaces the running one.
 | `speed_down` | Yellow | 1 | 25 ms |
 | `speed_limit` | Magenta | 1 | 50 ms |
 | `low_battery` | Red | 3 | 200 ms / 200 ms |
-| Power off | Cyan, steady | | 300 ms, after the buttons are released |
+| `locked` | Red | 1 | 50 ms |
+| `power_off` | Cyan | 1 | 300 ms |
 
 ## Battery and charger
 
 - `battery` thread: ADC channel `vbat` (AIN4, P0.28, gain 1/6, 12 bit) times `vbat_divider` (2, a 47k/47k divider on
   the POWER sheet), and the charger STAT1 (P0.03) and STAT2 (P0.02) levels, every 10 s.
-- Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)`: both high charge completed, STAT1 only charging,
-  STAT2 only fault, both low not charging. Unverified: on board 2 with a battery on USB it reads STAT1 low, STAT2 high
-  (fault), which most likely means charging per the BQ25185 datasheet.
+- Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)` per the datasheet status table: both high is not
+  charging (charge done, sleep or no input power), STAT1 high and STAT2 low is charging, STAT1 low is a fault (with STAT2
+  high recoverable: input overvoltage, TS hot or cold, thermal shutdown, system short; both low latched). Board 2 with a
+  battery on USB reads STAT1 low, STAT2 high, a recoverable fault: check the TS network and the STAT wiring.
 - `battery_percentage(mV)`: linear interpolation of a Li-ion curve: 3300 mV 0 %, 3500 5 %, 3600 10 %, 3700 30 %,
   3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. Reported through the BLE Battery Service. The charger state also goes to the charger characteristic.
-- `battery_guard`: 3 consecutive samples below 3300 mV while the charger is neither charging nor completed make the
+- `battery_guard`: 3 consecutive samples below 3300 mV while the charger is not charging make the
   controller show the red low-battery signal and power off. Any other sample resets the count.
 - The `vdd` ADC channel (VDDH / 5) is in the devicetree and not sampled.
 
@@ -120,14 +135,15 @@ response. Advertising restarts after a disconnect.
 | GTFOg control | `a7f00001-5c1e-4b8e-9d2a-6f0e1c3b4d50` | Fan speed `a7f00002-...`: uint8, 0..100 | read, write, notify |
 | | | Strobe `a7f00003-...`: uint8, 0 or 1 | read, write, notify |
 | | | Accelerometer `a7f00004-...`: stream, see below | notify |
-| | | Charger `a7f00005-...`: uint8, 0 not charging, 1 charging, 2 completed, 3 fault | read, notify |
+| | | Charger `a7f00005-...`: uint8, 0 not charging, 1 charging, 3 fault (2 is no longer sent) | read, notify |
+| | | Settings `a7f00006-...`: 2 bytes, see [Settings](#settings) | read, write |
 | mcumgr SMP | standard SMP UUID | Firmware update, see [Firmware update](#firmware-update-and-mcuboot) | write, notify |
 | Battery Service | standard | Battery level, updated every 10 s | per Zephyr BAS |
 | Device Information Service | standard | Model number `GTFOg`, manufacturer `elmaczete_customs` | per Zephyr DIS |
 
 The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing); bonds are stored
-in settings (NVS, `storage_partition`). Writes must be one byte; out-of-range values are rejected. Changes made by the
-buttons are notified to a connected phone. The settings store holds only the bonds: up to 4
+in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2); out-of-range values are rejected. Changes made by the
+buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
 (`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
 
 ## Accelerometer
@@ -146,8 +162,9 @@ in `ble_test.py`. The fan is not controlled by movement.
 
 ## Power off and wake-up
 
-`board_outputs::power_off()` shows cyan, waits until both buttons are released (at most 10 s), arms both as
-level-active wake sources, waits 300 ms, turns the LED off and calls `sys_poweroff()` (System OFF). A press wakes the
+`board_outputs::power_off()` lets the last signal (`power_off` or `low_battery`) finish (at most 2 s), turns the LED off,
+waits until both buttons are released (at most 10 s), arms both as level-active wake sources and calls `sys_poweroff()`
+(System OFF). A press wakes the
 chip through a reset.
 
 ## Firmware update and MCUboot
@@ -192,7 +209,7 @@ logging off.
 ## Open questions
 
 - Motion-based fan control is not designed.
-- The charger STAT table (see [Battery and charger](#battery-and-charger)) and the VBAT divider need checking on a board.
+- The VBAT divider needs checking on a board, and board 2 reports a charger fault on USB (see [Battery and charger](#battery-and-charger)).
 - MCUboot USB serial recovery is not tested on hardware.
 - BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
   host receives it, so its RF path or 32 MHz crystal is suspect.

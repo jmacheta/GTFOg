@@ -74,7 +74,7 @@ Marked `ponytail:` in the code; tune them on a board.
 | `vbat_divider` | 2 (47k/47k on the POWER sheet, unverified) | `battery.cpp` |
 | `fan_min_duty_permille` | 200 | `board.cpp` |
 | Li-ion curve | 8 points, 3300..4200 mV | `logic/battery.cpp` |
-| Charger STAT table | unverified against the BQ25185 datasheet | `logic/battery.cpp` |
+| Charger STAT table | per the BQ25185 datasheet; board 2 reports a recoverable fault on USB (TS network?) | `logic/battery.cpp` |
 
 ## Design files (`hardware/`)
 
