@@ -165,6 +165,6 @@ rest at warning. Read it with a J-Link RTT client or `nrfutil`. The MCUboot log 
 
 - Accelerometer-driven fan control is not designed.
 - The charger STAT table and the VBAT divider need checking on a board.
-- BLE: on the first board the radio transmits on the advertising channels (RADIO in TX, checked over SWD, also at
-  +8 dBm), but no host receives it. Suspect the RF path (antenna, matching) or the 32 MHz crystal, not the firmware.
+- BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
+  host receives it, so its RF path or 32 MHz crystal is suspect.
 - Flash headroom is about 2 KB (see [hardware.md](hardware.md#flash-map)).

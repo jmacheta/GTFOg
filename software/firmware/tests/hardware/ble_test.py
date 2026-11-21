@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Bluetooth LE check against a powered GTFOg board: python3 ble_test.py [--name GTFOg].
 
-Needs `pip install bleak` and a Bluetooth adapter on the host. Pairs (Just Works), then exercises the control service,
+Needs `pip install bleak` and a Bluetooth adapter on the host. On Linux, pair once first, since BlueZ refuses Just Works
+without an agent: `bluetoothctl` -> `agent NoInputNoOutput`, `default-agent`, `scan le`, `pair <address>`, `trust <address>`.
+Then the test exercises the control service,
 the Battery Service and the Device Information Service. Leaves the fan and the strobe off.
 """
 

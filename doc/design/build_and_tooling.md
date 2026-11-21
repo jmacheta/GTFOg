@@ -39,7 +39,9 @@ west twister --testsuite-root GTFOg/software/firmware/tests --platform native_si
 From an NCS install, pass the path to `software/firmware/tests`. The test case is `gtfog.logic` (`testcase.yaml`).
 
 On a board: `software/firmware/tests/hardware/ble_test.py` (Python, `pip install bleak`, a Bluetooth adapter) pairs with
-the device and checks the control service, BAS and DIS; it runs the fan at 1, 50 and 100 %. It is not part of CI. The
+the device and checks the control service, BAS and DIS; it runs the fan at 1, 50 and 100 %. It is not part of CI. On
+Linux, pair once with `bluetoothctl` and a `NoInputNoOutput` agent first (see the script header): without an agent,
+BlueZ rejects Just Works pairing (SMP reason 0x0c). The
 USB DFU check is the `dfu-util` command of [firmware.md](../firmware.md#usb-dfu-and-mcuboot) with an image whose
 `VERSION` is higher than the installed one; the RTT boot banner shows the new version.
 
