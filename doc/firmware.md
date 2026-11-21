@@ -127,7 +127,8 @@ response. Advertising restarts after a disconnect.
 
 The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing); bonds are stored
 in settings (NVS, `storage_partition`). Writes must be one byte; out-of-range values are rejected. Changes made by the
-buttons are notified to a connected phone. The settings store holds only the bonds.
+buttons are notified to a connected phone. The settings store holds only the bonds: up to 4
+(`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
 
 ## Accelerometer
 
