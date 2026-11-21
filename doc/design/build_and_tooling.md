@@ -5,8 +5,10 @@
 - nRF Connect SDK (NCS) v3.4.0, which is Zephyr 4.4.0; Zephyr SDK 1.0.1 (`arm-zephyr-eabi`).
 - Board `gtfog`, qualifier `gtfog/nrf52833` (Zephyr HWMv2). The board root is `software`.
 - C++23 (`CONFIG_STD_CPP23`).
-- Sysbuild with MCUboot: `sysbuild.conf` has `SB_CONFIG_BOOTLOADER_MCUBOOT=y`; `sysbuild/mcuboot.conf` selects
-  upgrade only (`CONFIG_BOOT_UPGRADE_ONLY`), downgrade prevention, warning log level and the synthesized 32 kHz clock.
+- Sysbuild with MCUboot: `sysbuild.conf` has `SB_CONFIG_BOOTLOADER_MCUBOOT=y`; sets `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with
+  revert). `sysbuild/mcuboot.conf` selects downgrade prevention, no logging, the synthesized 32 kHz clock, the status
+  hooks and USB serial recovery (CDC ACM, legacy USB device stack); `sysbuild/mcuboot.overlay` sets the recovery button
+  (`mcuboot-button0` = plus) and the CDC ACM device.
 
 ## West workspace
 
@@ -29,7 +31,7 @@ Images land in `build/` (the application under `build/firmware/`, MCUboot under 
 
 ## Tests
 
-Ztest suites in `software/firmware/tests/logic` (`battery`, `buttons`, `controller`) cover `src/logic`; the test
+Ztest suites in `software/firmware/tests/logic` (`accel`, `battery`, `buttons`, `controller`; 23 cases) cover `src/logic`; the test
 `CMakeLists.txt` compiles that directory directly. They run on the host with twister:
 
 ```sh
@@ -39,24 +41,28 @@ west twister --testsuite-root GTFOg/software/firmware/tests --platform native_si
 From an NCS install, pass the path to `software/firmware/tests`. The test case is `gtfog.logic` (`testcase.yaml`).
 
 On a board: `software/firmware/tests/hardware/ble_test.py` (Python, `pip install bleak`, a Bluetooth adapter) pairs with
-the device and checks the control service, BAS and DIS; it runs the fan at 1, 50 and 100 %. It is not part of CI. On
+the device and checks the control service, BAS and DIS; it runs the fan at 1, 50 and 100 %. It does not cover the accelerometer
+stream or the charger characteristic (the stream was checked ad hoc). It is not part of CI. On
 Linux, pair once with `bluetoothctl` and a `NoInputNoOutput` agent first (see the script header): without an agent,
 BlueZ rejects Just Works pairing (SMP reason 0x0c). The
-USB DFU check is the `dfu-util` command of [firmware.md](../firmware.md#usb-dfu-and-mcuboot) with an image whose
-`VERSION` is higher than the installed one; the RTT boot banner shows the new version.
+update check is the `smpmgr` sequence of [firmware.md](../firmware.md#firmware-update-and-mcuboot) with an image whose
+`VERSION` is higher than the installed one; the application has no log, so check the result by the new behavior or
+by `smpmgr image state-read`.
 
 ## Flash and DFU
 
 - `west flash` programs both images over SWD (J-Link or nrfutil; `board.cmake` also lists nrfjprog, pyocd and openocd).
-- USB DFU with `dfu-util`: see [firmware.md](../firmware.md#usb-dfu-and-mcuboot).
+- Updates over Bluetooth with `smpmgr`, and USB serial recovery: see
+  [firmware.md](../firmware.md#firmware-update-and-mcuboot).
 
 ## CMake and Kconfig
 
 - `software/firmware/CMakeLists.txt` finds Zephyr and adds `src/`; `src/CMakeLists.txt` lists the board sources and adds
   `src/logic/`. New sources are added by hand.
 - No third-party libraries are fetched.
-- App options are in `prj.conf` (C++23, full libc++, no exceptions or RTTI, RTT logging, PWM, I2C, ADXL345, ADC, NVS
-  and settings, Bluetooth peripheral with SMP, BAS and DIS, USB device_next with the DFU class into slot 1).
+- App options are in `prj.conf` (C++23, full libc++, no exceptions or RTTI, logging off (RTT backend to be enabled for
+  debugging), PWM, I2C, ADC, NVS and settings, Bluetooth peripheral with SMP, BAS and DIS, one connection, MTU 247,
+  mcumgr over Bluetooth into slot 1). No sensor driver: the ADXL345 uses raw I2C.
 - Board options are in `gtfog_defconfig` and `Kconfig.gtfog`.
 
 ## Formatting

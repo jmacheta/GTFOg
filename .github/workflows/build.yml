@@ -76,3 +76,29 @@ jobs:
         run: |
           files=$(git ls-files software | grep -E '\.(c|h|cpp|hpp)$')
           clang-format --dry-run --Werror $files
+
+  android:
+    name: Build Android app and run tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: software/android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The runner image ships an Android SDK; Gradle finds it through ANDROID_HOME.
+      - name: Build, unit tests, lint
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtfog-android-debug
+          path: software/android/app/build/outputs/apk/debug/*.apk

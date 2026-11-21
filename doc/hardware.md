@@ -10,7 +10,7 @@ only. The Zephyr board definition in `software/boards/arm/gtfog/` is the readabl
 | MCU | nRF52833 (`SOC_NRF52833_QIAA`), 512 KiB flash, 128 KiB RAM |
 | Fan | Blower fan driven by PWM (PWM0 channel 3, P0.11) |
 | Battery | Li-ion, up to 2000 mAh (README); charger BQ25185 (POWER sheet), status on two pins |
-| USB | USB-C: charging and DFU; VID 0x1209, PID 0xEACC, DFU PID 0xEACD |
+| USB | USB-C: charging; in MCUboot also serial recovery (VID 0x1209, PID 0xEACD); no USB in the application |
 | Sensor | ADXL345 accelerometer, I2C0 address 0x53, switched supply pin |
 | Lights | RGB status LED (PWM0), red strobe LED (PWM1) |
 | Inputs | Two buttons (minus, plus), active low with pull-ups |
@@ -38,7 +38,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | Plus button | P0.17 | GPIO in | Active low, pull-up |
 | Battery voltage | P0.28 (AIN4) | SAADC ch 4 | Gain 1/6, internal reference, 12 bit; behind a divider of 2 (47k/47k, unverified) |
 | Supply voltage | VDDH / 5 | SAADC ch 0 | Gain 1/2, internal reference, 12 bit; not sampled by the firmware |
-| USB | D+ / D- | USBD | |
+| USB | D+ / D- | USBD | MCUboot recovery only |
 
 ## Power
 
@@ -56,15 +56,14 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 
 | Partition | Offset | Size |
 | --- | --- | --- |
-| `mcuboot` | 0x00000 | 0x0C000 (48 KB) |
-| `image-0` (slot 0) | 0x0C000 | 0x32000 (200 KB) |
-| `image-1` (slot 1) | 0x3E000 | 0x32000 (200 KB) |
-| `image-scratch` | 0x70000 | 0x0A000 (40 KB) |
+| `mcuboot` | 0x00000 | 0x10000 (64 KB) |
+| `image-0` (slot 0) | 0x10000 | 0x35000 (212 KB) |
+| `image-1` (slot 1) | 0x45000 | 0x35000 (212 KB) |
 | `storage` | 0x7A000 | 0x06000 (24 KB) |
 
-The map must stay as it is: boards in use carry an MCUboot built for it, and USB DFU cannot replace MCUboot. MCUboot is
-upgrade only, so `image-scratch` is unused. Use: the application (built with LTO) takes about 194 KB of 196 KB, MCUboot
-28 KB of 48 KB. `storage` holds the Bluetooth bonds.
+There is no scratch partition (swap using move). Use: the application (built with LTO) takes about 156 KB of about 204 KB
+available, MCUboot about 54 KB of 64 KB. `storage` holds the Bluetooth bonds. Boards with an MCUboot built for an older map
+need the new MCUboot over SWD once.
 
 ## Calibration knobs
 
