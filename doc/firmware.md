@@ -12,6 +12,7 @@ Pure logic, no Zephyr includes (headers in `src/include/`, sources in `src/`, te
 | --- | --- |
 | `gestures.hpp/.cpp` | `button_gestures`: turns sampled button levels and time into `button_event`s (including the unlock gesture); `button_timing` holds the thresholds |
 | `battery_model.hpp/.cpp` | `decode_charger_state`, `battery_percentage` (Li-ion curve), `battery_guard` (low-battery cutoff) |
+| `rf_test.hpp` | `rf_test_frequency_mhz` (BLE channel index to MHz), `decode_rf_test` (payload of the RF test characteristic) |
 | `motion.hpp/.cpp` | `pack_accelerometer_samples`: accelerometer stream packet; `counts_to_milli_g`, `accelerometer_samples_per_packet`; `activity_classifier`; `fifo_watchdog` |
 | `controller.hpp/.cpp` | `controller_table`: the Boost.SML transition table; `controller_data` (the steps it calls); `controller`, the wrapper that turns calls into events; abstract `outputs`; settings encoding; `fan_duty_permille`, `pwm_pulse_ns` |
 
@@ -24,6 +25,7 @@ Board layer (`src/`):
 | `buttons.cpp` | Button GPIO interrupts, `buttons` thread feeding `button_gestures`, wake-up arming |
 | `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog (right after the controller mutex section, before the BLE notifications); `battery_sample()` for the boot check |
 | `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service (the mcumgr SMP service comes from NCS) |
+| `rf_test.cpp` | `rf_test` thread: the RF carrier test (see [RF carrier test](#rf-carrier-test)) |
 | `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 only while a phone streams or motion mode is on (the thread owns the power pin); feeds the activity classifier and the stream; power-cycles a silent sensor |
 | `main.cpp` | `main()`: loads the settings (`app_settings_load`), `ble_init`, checks the battery (`check_start`), `power_on`, then confirms the running image once Bluetooth is up; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once, only when the field still has the erased value 7 (any other value is left alone, to avoid a reset loop) |
 
@@ -34,6 +36,7 @@ Board layer (`src/`):
 | `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Starts BLE, checks the battery, powers the controller on, confirms the image, returns |
 | `buttons` | 5 | 2048 B | Waits for a pin change; polls every 20 ms while a button is down, or always when the interrupt setup failed (`fault` once) |
 | `battery` | 7 | 2048 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
+| `rf_test` | 6 | 2048 B | Sleeps until a phone writes the RF test characteristic, then runs the carrier test and reboots |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
 The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
@@ -146,6 +149,7 @@ and blinks; a new signal replaces the running one.
 | `pairing_refused` | Magenta | 2 | 100 ms / 100 ms |
 | `fault` | Red | 4 | 50 ms / 50 ms |
 | `power_off` | Cyan | 1 | 300 ms |
+| `rf_test` | Blue | 1 | 100 ms, repeated every second during the [RF carrier test](#rf-carrier-test); shown even in stealth mode |
 
 ## Battery and charger
 
@@ -176,12 +180,13 @@ response. Advertising restarts after a disconnect; when starting it fails, it is
 | | | Charger `a7f00005-...`: uint8, 0 not charging, 1 charging, 3 fault (2 is no longer sent) | read, notify |
 | | | Settings `a7f00006-...`: 8 bytes, see [Settings](#settings) | read, write, notify |
 | | | Fan state `a7f00007-...`: 2 bytes, [0] speed the fan runs at in %, [1] activity level 0 still, 1 walking, 2 running, 255 manual mode; notified when either changes | read, notify |
+| | | RF test `a7f00008-...`: 2 bytes, [0] BLE channel index 0..39, [1] seconds 1..255; see [RF carrier test](#rf-carrier-test) | write |
 | mcumgr SMP | standard SMP UUID | Firmware update, see [Firmware update](#firmware-update-and-mcuboot) | write, notify |
 | Battery Service | standard | Battery level, updated every 10 s | per Zephyr BAS |
 | Device Information Service | standard | Model number `GTFOg`, manufacturer `elmaczete_customs` | per Zephyr DIS |
 
 The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing, LE Secure Connections only: `CONFIG_BT_SMP_SC_ONLY`, so a phone without them cannot pair); bonds are stored
-in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2, 6 or 8); out-of-range values are rejected. Changes made by the
+in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2, 6 or 8, RF test 2); out-of-range values are rejected. Changes made by the
 buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
 (`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest. The firmware has no gesture or command that removes a bond. To clear all bonds, erase the flash over SWD (`west flash --erase`) and flash again; this also removes the settings.
 
@@ -208,6 +213,15 @@ Notification frame (little endian, `pack_accelerometer_samples`): u16 `seq` (sta
 then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accelerometer_samples_per_packet`). A full
 controller buffer drops a packet; a gap in `seq` shows it. Checked ad hoc on a board: about 100 Hz, no gaps; this is not
 in `ble_test.py`.
+
+## RF carrier test
+
+For bench measurements (spectrum analyzer, SDR, antenna checks) only: the goggles transmit an unmodulated carrier at 0 dBm, so use it where that is allowed (2.4 GHz band, short, at low power, not near other radios).
+
+- Start: the Debug tab of the app writes `[channel, seconds]` to characteristic `a7f00008` (encrypted link; channel 0..39 is the BLE channel index: 37 -> 2402, 38 -> 2426, 39 -> 2480 MHz, data channels 0..10 -> 2404..2424 and 11..36 -> 2428..2478 MHz; seconds 1..255). A wrong length, channel or 0 seconds gets an ATT error; a second request while one is starting gets one too.
+- Run (`rf_test` thread, not the Bluetooth callback): 300 ms after the write response it saves a pending settings change, closes the link, stops the Bluetooth stack (`bt_disable`), starts HFXO, sets RADIO to BLE 1 Mbit at the channel's frequency and 0 dBm and triggers TXEN without START, so the transmitter idles in TXIDLE and sends the bare carrier. The fan and strobe are off and stay off (`board_outputs` ignores the controller while the test runs; button gestures are ignored too) and the status LED blinks blue once a second, also in stealth mode. The battery thread keeps feeding the watchdog; auto-off still counts (the idle timer is the controller's), so with a short auto-off or the transport lock (1 minute) the device may power off before the test ends.
+- Stop: any button press (after the first second) or the end of the time, then `sys_reboot(SYS_REBOOT_COLD)`, so Bluetooth comes back clean and the app reconnects. A phone cannot stop the test: the link is gone. If the radio does not start the test ends at once with the reboot.
+- Why not MPSL release: `mpsl_lib_uninit()` needs `CONFIG_MPSL_DYNAMIC_INTERRUPTS` and stops the clock the kernel runs on. MPSL stays initialised and idle after `bt_disable()` (no protocol stack or timeslot uses RADIO), and the test drives RADIO itself like the NCS `radio_test` sample. Not tested on hardware: check the carrier with a receiver or spectrum analyzer.
 
 ## Power off and wake-up
 

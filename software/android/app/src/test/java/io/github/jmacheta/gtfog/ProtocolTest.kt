@@ -294,4 +294,49 @@ class ProtocolTest {
             assertArrayEquals(b, parseSettings(b)!!.encode())
         }
     }
+
+    @Test
+    fun rfTestMapping() {
+        assertEquals(2402, rfTestMhz(37))
+        assertEquals(2426, rfTestMhz(38))
+        assertEquals(2480, rfTestMhz(39))
+        assertEquals(2404, rfTestMhz(0))
+        assertEquals(2424, rfTestMhz(10))
+        assertEquals(2428, rfTestMhz(11))
+        assertEquals(2444, rfTestMhz(RF_TEST_DEFAULT_CHANNEL))
+        assertEquals(2478, rfTestMhz(36))
+        assertNull(rfTestMhz(-1))
+        assertNull(rfTestMhz(40))
+        // 40 distinct frequencies on the 2 MHz grid from 2402 to 2480.
+        assertEquals((0..39).map { 2402 + 2 * it }, (0..39).map { rfTestMhz(it)!! }.sorted())
+    }
+
+    @Test
+    fun rfTestPayload() {
+        assertArrayEquals(byteArrayOf(19, 30), encodeRfTest(19, 30))
+        assertArrayEquals(byteArrayOf(39, 120), encodeRfTest(39, 120))
+        assertArrayEquals(byteArrayOf(0, -1), encodeRfTest(0, 1000)) // seconds clamp to 255
+        assertTrue(runCatching { encodeRfTest(40, 10) }.isFailure)
+        assertTrue(rfTestConfirmText(19, 60).contains("2444 MHz for 60 s"))
+    }
+
+    @Test
+    fun rfTestCountdown() {
+        assertEquals(30, rfTestRemainingS(30_000, 0))
+        assertEquals(30, rfTestRemainingS(30_000, 1))
+        assertEquals(1, rfTestRemainingS(30_000, 29_999))
+        assertEquals(0, rfTestRemainingS(30_000, 30_000))
+        assertEquals(0, rfTestRemainingS(30_000, 99_000))
+    }
+
+    @Test
+    fun rfTestDropIsAnOrdinaryReconnect() {
+        // The goggles close a ready link (status 19): the client reconnects, no bad-bond verdict, however often a test is run.
+        val policy = LinkPolicy()
+        policy.ready()
+        repeat(5) {
+            assertEquals(Next.Reconnect, policy.onDisconnect(19, up = false, bonded = true))
+            policy.ready()
+        }
+    }
 }

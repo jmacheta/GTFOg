@@ -21,6 +21,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,10 +47,12 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Composable
 fun DebugTab(s: Session, st: DeviceState) {
     AccelCard(s, st)
+    if (st.hasRfTest || st.rfTestEndsMs != null) RfTestCard(s, st)
     Recordings(s)
 }
 
@@ -146,6 +149,53 @@ private fun AccelCard(s: Session, st: DeviceState) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RfTestCard(s: Session, st: DeviceState) {
+    val dfu by s.dfu.state.collectAsStateWithLifecycle()
+    var channel by rememberSaveable { mutableStateOf(RF_TEST_DEFAULT_CHANNEL) }
+    var seconds by rememberSaveable { mutableStateOf(30) }
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val endsMs = st.rfTestEndsMs
+    LaunchedEffect(endsMs) {
+        while (endsMs != null) {
+            now = System.currentTimeMillis()
+            delay(500)
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Start the RF carrier test?") },
+            text = { Text(rfTestConfirmText(channel, seconds)) },
+            confirmButton = { TextButton({ confirm = false; s.startRfTest(channel, seconds) }) { Text("Start") } },
+            dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } },
+        )
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("RF carrier test", style = MaterialTheme.typography.titleMedium)
+            if (endsMs != null) {
+                val left = rfTestRemainingS(endsMs, now)
+                Text(
+                    if (left > 0) "Carrier on ${rfTestMhz(channel)} MHz, about $left s left. Press any button on the goggles to stop earlier."
+                    else "Waiting for the goggles to restart…",
+                )
+            } else {
+                val ok = st.conn == Conn.Connected && !dfu.running
+                Text("Channel $channel (${rfTestMhz(channel)} MHz)")
+                Slider(channel.toFloat(), { channel = it.roundToInt() }, valueRange = 0f..39f, steps = 38, enabled = ok)
+                ChoiceChips(RF_TEST_SECONDS.map { "$it s" to it }, seconds, ok) { seconds = it }
+                Button({ confirm = true }, Modifier.heightIn(min = TouchHeight), enabled = ok) { Text("Start") }
+                Text(
+                    if (dfu.running) "Not during a firmware update." else "Bench test only: an unmodulated carrier at 0 dBm. The link drops until it ends.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }

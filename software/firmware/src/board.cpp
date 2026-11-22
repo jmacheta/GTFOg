@@ -5,6 +5,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/poweroff.h>
 
+#include <atomic>
 #include <cstdint>
 
 LOG_MODULE_REGISTER(board, LOG_LEVEL_INF);
@@ -35,6 +36,7 @@ constexpr color yellow{255, 255, 0};
 constexpr color magenta{255, 0, 255};
 constexpr color red{255, 0, 0};
 constexpr color cyan{0, 255, 255};
+constexpr color blue{0, 0, 255};
 
 struct pattern {
   color shown;
@@ -67,6 +69,8 @@ constexpr auto pattern_of(signal what) noexcept -> pattern {
     return {red, 4, 50, 50};
   case signal::power_off:
     return {cyan, 1, 300, 0};
+  case signal::rf_test:
+    return {blue, 1, 100, 0};
   }
   return {black, 0, 0, 0};
 }
@@ -102,6 +106,7 @@ unsigned pattern_phase;
 bool powering_off;         // Set by power_off(): a step that was already running must not touch the LED any more.
 std::int64_t phase_end_ms; // Uptime at which the phase shown last ends.
 k_spinlock pattern_lock;
+std::atomic<bool> quiet; // RF carrier test: the fan, strobe and controller signals stay off, whatever the controller wants.
 
 void indicator_step(k_work *work);
 K_WORK_DELAYABLE_DEFINE(indicator_work, indicator_step);
@@ -147,11 +152,13 @@ void strobe_step(k_work *) {
 class board_outputs final : public outputs {
 public:
   void set_fan(unsigned percent) override {
+    percent = quiet ? 0 : percent;
     set_pwm(fan_pwm, fan_duty_permille(percent, fan_min_duty_permille));
     ble_state_changed();
   }
 
   void set_strobe(bool on) override {
+    on = on && !quiet;
     k_mutex_lock(&strobe_mutex, K_FOREVER);
     strobe_wanted = on;
     if(on) {
@@ -166,6 +173,9 @@ public:
   }
 
   void show(signal what) override {
+    if(quiet && what != signal::rf_test) {
+      return;
+    }
     auto key = k_spin_lock(&pattern_lock);
     current_pattern = pattern_of(what);
     pattern_phase = 0;
@@ -217,5 +227,12 @@ namespace gtfog {
 K_MUTEX_DEFINE(controller_mutex);
 
 auto app_controller() noexcept -> gtfog::controller & { return the_controller; }
+
+void board_rf_test_tick() {
+  quiet = true;
+  board.set_fan(0);
+  board.set_strobe(false);
+  board.show(signal::rf_test);
+}
 
 } // namespace gtfog

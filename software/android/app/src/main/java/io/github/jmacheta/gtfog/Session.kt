@@ -132,6 +132,14 @@ class Session(private val app: Application) {
         client.disconnect()
     }
 
+    /** Live and a recording end first: the link is gone for the whole test. */
+    fun startRfTest(channel: Int, seconds: Int) {
+        if (dfu.state.value.running) return
+        stopRecording()
+        client.setLive(false)
+        client.startRfTest(channel, seconds)
+    }
+
     fun setLive(on: Boolean) {
         if (on && dfu.state.value.running) return
         if (on) {

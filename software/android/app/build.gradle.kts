@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.jmacheta.gtfog"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.3.6"
+        versionCode = 10
+        versionName = "0.3.7"
     }
     // Release signing only when the keystore is given as Gradle properties (gtfog.storeFile, ...); never in the repo.
     val storeFile = providers.gradleProperty("gtfog.storeFile").orNull

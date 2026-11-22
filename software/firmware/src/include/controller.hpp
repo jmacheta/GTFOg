@@ -28,6 +28,7 @@ enum class signal {
   pairing_refused, // A new phone tried to pair after the pairing window closed.
   fault,           // A part (buttons, ADC, accelerometer) failed for good; the device keeps running without it.
   power_off,       // Last, right before power_off(); the board waits for it to finish.
+  rf_test,         // The RF carrier test is on; only the test shows it, once a second, whatever the stealth setting.
 };
 
 enum class fan_mode : std::uint8_t {

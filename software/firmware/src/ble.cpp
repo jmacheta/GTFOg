@@ -35,6 +35,7 @@ bt_uuid_128 const accelerometer_uuid = GTFOG_UUID(4);
 bt_uuid_128 const charger_uuid = GTFOG_UUID(5);
 bt_uuid_128 const settings_uuid = GTFOG_UUID(6);
 bt_uuid_128 const effective_fan_uuid = GTFOG_UUID(7);
+bt_uuid_128 const rf_test_uuid = GTFOG_UUID(8);
 constexpr char settings_key[] = "gtfog/cfg";
 constexpr auto save_delay = K_SECONDS(2); // Settings changes within this time are stored together.
 constexpr auto advertising_retry = K_SECONDS(5);
@@ -43,6 +44,7 @@ std::atomic<std::uint8_t> charger{0};
 // ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1); the accelerometer thread reads only the cached ATT MTU.
 std::atomic<bt_conn *> current_conn{nullptr};
 std::atomic<std::uint16_t> att_mtu{0};
+std::atomic<bool> stopping{false};       // ble_stop() ran: no more advertising.
 std::atomic<bool> link_encrypted{false}; // Security level 2 or higher; only such a connection counts as a phone in use.
 
 auto read_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
@@ -129,6 +131,17 @@ auto read_effective_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std:
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
+auto write_rf_test(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
+  if(offset != 0 || !gtfog::is_rf_test_size(len)) {
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+  }
+  auto request = gtfog::decode_rf_test({static_cast<std::uint8_t const *>(buf), len});
+  if(!request || gtfog::rf_test_start(*request) != 0) {
+    return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+  }
+  return len;
+}
+
 void accelerometer_subscribed(bt_gatt_attr const *, std::uint16_t value) { accelerometer_stream(value == BT_GATT_CCC_NOTIFY); }
 
 constexpr auto rw_notify = BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY;
@@ -150,20 +163,21 @@ BT_GATT_SERVICE_DEFINE(gtfog_service, BT_GATT_PRIMARY_SERVICE(&service_uuid),
                        BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
                        BT_GATT_CHARACTERISTIC(&effective_fan_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ_ENCRYPT,
                                               read_effective_fan, nullptr, nullptr),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT), );
+                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+                       BT_GATT_CHARACTERISTIC(&rf_test_uuid.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE_ENCRYPT, nullptr, write_rf_test, nullptr), );
 
 SETTINGS_STATIC_HANDLER_DEFINE(gtfog, "gtfog", nullptr, load_settings, nullptr, nullptr);
 
 namespace {
 
-// Attribute indices in gtfog_service: 0 service, 1 + 3k characteristic declaration, 2 + 3k value, 3 + 3k CCC.
+// Attribute indices in gtfog_service: 0 service, 1 + 3k characteristic declaration, 2 + 3k value, 3 + 3k CCC (the RF test one has no CCC).
 constexpr auto fan_value = 2;
 constexpr auto strobe_value = 5;
 constexpr auto accelerometer_value = 8;
 constexpr auto charger_value = 11;
 constexpr auto settings_value = 14;
 constexpr auto effective_fan_value = 17;
-static_assert(ARRAY_SIZE(attr_gtfog_service) == 19, "update the attribute indices above");
+static_assert(ARRAY_SIZE(attr_gtfog_service) == 21, "update the attribute indices above");
 
 std::uint8_t const flags[] = {BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR};
 std::uint8_t const service_uuid_bytes[] = {BT_UUID_128_ENCODE(0xa7f00001, 0x5c1e, 0x4b8e, 0x9d2a, 0x6f0e1c3b4d50)};
@@ -181,6 +195,9 @@ K_WORK_DELAYABLE_DEFINE(advertising_work, start_advertising);
 
 // A failed start is tried again every 5 s, so the device does not stay unreachable.
 void start_advertising(k_work *) {
+  if(stopping) {
+    return;
+  }
   bt_le_adv_param param = BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, nullptr);
   if(int err = bt_le_adv_start(&param, advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
      err != 0 && err != -EALREADY) {
@@ -317,6 +334,19 @@ auto ble_init() -> int {
   }
   k_work_reschedule(&advertising_work, K_NO_WAIT);
   return 0;
+}
+
+auto ble_stop() -> int {
+  constexpr auto disconnect_wait_ms = 2000;
+  stopping = true;
+  if(auto *conn = current_conn.load()) {
+    std::ignore = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN); // Fails only when it is gone already.
+  }
+  for(int waited = 0; waited < disconnect_wait_ms && current_conn; waited += 10) {
+    k_msleep(10);
+  }
+  std::ignore = bt_le_adv_stop(); // Fails when not advertising.
+  return bt_disable();
 }
 
 auto ble_connected() -> bool { return link_encrypted; }

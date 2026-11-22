@@ -62,6 +62,10 @@ data class DeviceState(
     val bondProblem: Boolean = false,
     /** Notifications could not be enabled (after the retries); shown in the Debug tab. */
     val streamError: String? = null,
+    /** The goggles have the RF test characteristic (firmware 0.3.11+). */
+    val hasRfTest: Boolean = false,
+    /** Uptime-independent wall clock time at which a started RF carrier test ends (the link is down until then); null when none runs. */
+    val rfTestEndsMs: Long? = null,
 )
 
 private fun charName(u: UUID) = when (u) {
@@ -268,6 +272,24 @@ class GtfogClient(
         setFan(stepFan(st.fan ?: return, dir, st.settings?.fanStep ?: 5))
     }
 
+    /**
+     * Starts the carrier test: the goggles drop the link on purpose, so [DeviceState.rfTestEndsMs] is set and the ordinary
+     * reconnect (status 19 after a ready link is not an early drop and shows no error) brings the link back after their reboot.
+     */
+    fun startRfTest(channel: Int, seconds: Int) {
+        val c = chars[Uuids.RF_TEST] ?: return
+        val bytes = encodeRfTest(channel, seconds)
+        // No read-back: the characteristic is write only.
+        enqueue(Uuids.RF_TEST, { status ->
+            _state.update {
+                if (status == 0) it.copy(rfTestEndsMs = System.currentTimeMillis() + seconds * 1000L)
+                else it.copy(notice = "Could not start the RF test", noticeSeq = it.noticeSeq + 1)
+            }
+        }) {
+            writeCharacteristic(c, bytes)
+        }
+    }
+
     fun setLive(on: Boolean) {
         live = on
         _state.update { it.copy(live = on, streamError = if (on) null else it.streamError) }
@@ -353,10 +375,10 @@ class GtfogClient(
         policy.ready()
         up = false
         backoff.reset()
-        _state.update { it.copy(conn = Conn.Connected, error = null, streamError = null) }
+        _state.update { it.copy(conn = Conn.Connected, error = null, streamError = null, rfTestEndsMs = null) }
         listOf(Uuids.FAN, Uuids.FAN_ACTUAL, Uuids.STROBE, Uuids.CHARGER, Uuids.BATTERY, Uuids.SETTINGS).forEach { notify(it, true) }
         if (live) notify(Uuids.ACCEL, true)
-        _state.update { it.copy(hasSettings = Uuids.SETTINGS in chars) }
+        _state.update { it.copy(hasSettings = Uuids.SETTINGS in chars, hasRfTest = Uuids.RF_TEST in chars) }
         listOf(Uuids.BATTERY, Uuids.FAN, Uuids.FAN_ACTUAL, Uuids.STROBE, Uuids.CHARGER, Uuids.SETTINGS, Uuids.MODEL, Uuids.MANUFACTURER).forEach(::read)
         if (reconnected) onReconnect(System.currentTimeMillis())
     }

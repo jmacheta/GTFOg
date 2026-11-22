@@ -62,7 +62,8 @@ void buttons_thread(void *, void *, void *) {
   }
   while(true) {
     auto now = std::chrono::milliseconds{k_uptime_get()};
-    if(auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now)) {
+    auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now);
+    if(event && !gtfog::rf_test_running()) {
       with_controller([&](gtfog::controller &control) { control.handle(*event); });
     }
     k_sem_take(&button_changed, (init_error != 0 || !gestures.is_idle()) ? poll_interval : K_FOREVER);
@@ -72,6 +73,8 @@ void buttons_thread(void *, void *, void *) {
 K_THREAD_DEFINE(buttons, 2048, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 0);
 
 } // namespace
+
+auto gtfog::buttons_pressed() -> bool { return gpio_pin_get_dt(&plus) > 0 || gpio_pin_get_dt(&minus) > 0; }
 
 void gtfog::buttons_arm_wake() {
   constexpr auto release_timeout_ms = 10'000;

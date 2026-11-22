@@ -14,6 +14,8 @@ object Uuids {
     val SETTINGS: UUID = UUID.fromString("a7f00006-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     /** Speed the fan runs at and the activity level (firmware 0.3+; the level only from 0.3.2). */
     val FAN_ACTUAL: UUID = UUID.fromString("a7f00007-5c1e-4b8e-9d2a-6f0e1c3b4d50")
+    /** Write only, firmware 0.3.11+: [channel, seconds] starts an RF carrier test, see [encodeRfTest]. */
+    val RF_TEST: UUID = UUID.fromString("a7f00008-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val BATTERY: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
     val MODEL: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
     val MANUFACTURER: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
@@ -114,6 +116,32 @@ fun batteryDescription(level: Int?, charger: Int?): String = when {
     charger == 1 -> "Battery $level %, charging"
     else -> "Battery $level %"
 }
+
+const val RF_TEST_DEFAULT_CHANNEL = 19
+val RF_TEST_SECONDS = listOf(10, 30, 60, 120)
+
+/** Carrier frequency in MHz of a BLE channel index 0..39 (37, 38, 39 advertise); null outside it. The firmware uses the same table. */
+fun rfTestMhz(channel: Int): Int? = when (channel) {
+    37 -> 2402
+    38 -> 2426
+    39 -> 2480
+    in 0..10 -> 2404 + 2 * channel
+    in 11..36 -> 2428 + 2 * (channel - 11)
+    else -> null
+}
+
+/** The RF test characteristic payload: BLE channel index and seconds (1..255). */
+fun encodeRfTest(channel: Int, seconds: Int): ByteArray {
+    require(rfTestMhz(channel) != null) { "channel $channel" }
+    return byteArrayOf(channel.toByte(), seconds.coerceIn(1, 255).toByte())
+}
+
+fun rfTestConfirmText(channel: Int, seconds: Int) =
+    "The goggles will drop the connection and transmit a carrier on ${rfTestMhz(channel)} MHz for $seconds s. " +
+        "Press any button on the goggles to stop earlier. They restart afterwards and the app reconnects."
+
+/** Whole seconds left until [endsMs], rounded up; 0 when it has passed. */
+fun rfTestRemainingS(endsMs: Long, nowMs: Long): Int = ((endsMs - nowMs + 999) / 1000).coerceAtLeast(0).toInt()
 
 const val DFU_MIN_BATTERY = 50
 
