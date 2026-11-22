@@ -10,13 +10,17 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <optional>
 #include <tuple>
 #include <utility>
 
 LOG_MODULE_REGISTER(ble, LOG_LEVEL_INF);
+
+K_MUTEX_DEFINE(save_lock); // Keeps the delayed save and the save before System OFF apart.
 
 namespace {
 
@@ -32,7 +36,10 @@ bt_uuid_128 const effective_fan_uuid = GTFOG_UUID(7);
 constexpr char settings_key[] = "gtfog/cfg";
 
 std::atomic<std::uint8_t> charger{0};
-bt_conn *current_conn; // ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1).
+// ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1). Written by the Bluetooth threads, read by the others; the
+// accelerometer thread reads only the cached ATT MTU, never the connection.
+std::atomic<bt_conn *> current_conn{nullptr};
+std::atomic<std::uint16_t> att_mtu{0};
 
 auto read_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
   auto value = with_controller([](gtfog::controller &c) { return static_cast<std::uint8_t>(c.fan_speed()); });
@@ -44,7 +51,7 @@ auto write_fan(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t l
     return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
   auto value = *static_cast<std::uint8_t const *>(buf);
-  if(value > 100) {
+  if(!gtfog::is_fan_percent(value)) {
     return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
   }
   with_controller([&](gtfog::controller &c) { c.set_fan_speed(value); });
@@ -61,7 +68,7 @@ auto write_strobe(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_
     return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
   auto value = *static_cast<std::uint8_t const *>(buf);
-  if(value > 1) {
+  if(!gtfog::is_strobe_value(value)) {
     return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
   }
   with_controller([&](gtfog::controller &c) { c.set_strobe(value != 0); });
@@ -81,21 +88,21 @@ auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint
 auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
   auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len});
   if(offset != 0 || !settings) {
-    bool length_ok = len == gtfog::settings_size || len == gtfog::settings_size_v2 || len == gtfog::settings_size_v1;
-    return BT_GATT_ERR(length_ok ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    return BT_GATT_ERR(gtfog::is_settings_size(len) ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
   with_controller([&](gtfog::controller &c) { c.update_settings(*settings); }); // Calls ble_settings_changed().
   return len;
 }
 
+std::optional<std::array<std::uint8_t, gtfog::settings_size>> last_saved; // Flash content; used by load_settings and save_pending, under save_lock.
 auto load_settings(char const *key, std::size_t len, settings_read_cb read, void *arg) -> int {
   std::array<std::uint8_t, gtfog::settings_size> bytes{};
-  bool known_size = len == gtfog::settings_size || len == gtfog::settings_size_v2 || len == gtfog::settings_size_v1;
-  if(std::strcmp(key, "cfg") != 0 || !known_size || read(arg, bytes.data(), len) != static_cast<ssize_t>(len)) {
+  if(std::strcmp(key, "cfg") != 0 || !gtfog::is_settings_size(len) || read(arg, bytes.data(), len) != static_cast<ssize_t>(len)) {
     return 0; // Unknown or damaged entries keep the defaults.
   }
   if(auto settings = gtfog::decode_settings({bytes.data(), len})) {
     with_controller([&](gtfog::controller &c) { c.configure(*settings); });
+    last_saved = gtfog::encode(*settings);
   }
   return 0;
 }
@@ -140,6 +147,7 @@ constexpr auto accel_value = 8;
 constexpr auto charger_value = 11;
 constexpr auto settings_value = 14;
 constexpr auto effective_fan_value = 17;
+static_assert(ARRAY_SIZE(attr_gtfog_service) == 19, "update the attribute indices above");
 
 std::uint8_t const flags[] = {BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR};
 std::uint8_t const service_uuid_bytes[] = {BT_UUID_128_ENCODE(0xa7f00001, 0x5c1e, 0x4b8e, 0x9d2a, 0x6f0e1c3b4d50)};
@@ -172,24 +180,52 @@ void notify_state(k_work *) {
 }
 K_WORK_DEFINE(notify_work, notify_state);
 
-std::array<std::uint8_t, gtfog::settings_size> pending_settings;
+std::optional<std::array<std::uint8_t, gtfog::settings_size>> pending_settings;
 k_spinlock pending_settings_lock;
 
-void save_settings(k_work *) {
+// Writes the newest settings to flash unless they are already there. Used by the delayed work and by ble_settings_flush.
+void save_pending() {
+  k_mutex_lock(&save_lock, K_FOREVER);
   auto key = k_spin_lock(&pending_settings_lock);
   auto bytes = pending_settings;
   k_spin_unlock(&pending_settings_lock, key);
-  if(int err = settings_save_one(settings_key, bytes.data(), bytes.size()); err != 0) {
-    LOG_ERR("save settings: %d", err);
+  if(bytes && bytes != last_saved) {
+    if(int err = settings_save_one(settings_key, bytes->data(), bytes->size()); err != 0) {
+      LOG_ERR("save settings: %d", err);
+    } else {
+      last_saved = bytes;
+    }
   }
-  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[settings_value], bytes.data(), static_cast<std::uint16_t>(bytes.size()));
+  k_mutex_unlock(&save_lock);
 }
-K_WORK_DEFINE(save_settings_work, save_settings);
+
+void save_settings(k_work *) { save_pending(); }
+K_WORK_DELAYABLE_DEFINE(save_settings_work, save_settings);
+
+void notify_settings(k_work *) {
+  auto key = k_spin_lock(&pending_settings_lock);
+  auto bytes = pending_settings;
+  k_spin_unlock(&pending_settings_lock, key);
+  if(bytes) {
+    std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[settings_value], bytes->data(), static_cast<std::uint16_t>(bytes->size()));
+  }
+}
+K_WORK_DEFINE(notify_settings_work, notify_settings);
+
+// Remembers that a refused pairing needs a status LED signal; the work takes the controller mutex, the Bluetooth callback must not.
+void report_pairing_refused(k_work *) {
+  with_controller([](gtfog::controller &c) { c.report(gtfog::signal::pairing_refused); });
+}
+K_WORK_DEFINE(pairing_refused_work, report_pairing_refused);
 
 // New pairings are only accepted in the first minutes after boot; bonded phones are not asked.
 enum bt_security_err pairing_accept(bt_conn *, bt_conn_pairing_feat const *) {
   constexpr std::int64_t pairing_window_ms = 3 * 60 * 1000;
-  return k_uptime_get() < pairing_window_ms ? BT_SECURITY_ERR_SUCCESS : BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
+  if(k_uptime_get() < pairing_window_ms) {
+    return BT_SECURITY_ERR_SUCCESS;
+  }
+  k_work_submit(&pairing_refused_work);
+  return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
 }
 
 bt_conn_auth_cb const auth_callbacks = {.pairing_accept = pairing_accept};
@@ -199,15 +235,20 @@ void connected(bt_conn *conn, std::uint8_t err) {
     LOG_WRN("connection failed: 0x%02x", err);
     return;
   }
+  att_mtu = bt_gatt_get_mtu(conn);
   current_conn = bt_conn_ref(conn);
 }
+
+void mtu_updated(bt_conn *, std::uint16_t tx, std::uint16_t rx) { att_mtu = std::min(tx, rx); }
+
+bt_gatt_cb gatt_callbacks = {.att_mtu_updated = mtu_updated};
 
 void disconnected(bt_conn *conn, std::uint8_t reason) {
   LOG_INF("disconnected: 0x%02x", reason);
   accelerometer_stream(false);
   if(conn == current_conn) {
-    bt_conn_unref(current_conn);
-    current_conn = nullptr;
+    att_mtu = 0;
+    bt_conn_unref(current_conn.exchange(nullptr));
   }
 }
 
@@ -221,21 +262,32 @@ BT_CONN_CB_DEFINE(connection_callbacks) = {
     .recycled = recycled,
 };
 
+void app_settings_load() {
+  if(int err = settings_subsys_init(); err != 0) {
+    LOG_WRN("settings init: %d", err);
+    return;
+  }
+  if(int err = settings_load_subtree("gtfog"); err != 0) {
+    LOG_WRN("settings: %d", err);
+  }
+}
+
 auto ble_init() -> int {
+  bt_gatt_cb_register(&gatt_callbacks);
   if(int err = bt_conn_auth_cb_register(&auth_callbacks); err != 0) {
     return err;
   }
   if(int err = bt_enable(nullptr); err != 0) {
     return err;
   }
-  if(int err = settings_load(); err != 0) {
-    LOG_WRN("settings: %d", err);
+  if(int err = settings_load_subtree("bt"); err != 0) { // Bonds; the "gtfog" subtree was loaded by app_settings_load().
+    LOG_WRN("bt settings: %d", err);
   }
   k_work_submit(&advertising_work);
   return 0;
 }
 
-auto ble_connected() -> bool { return current_conn != nullptr; }
+auto ble_connected() -> bool { return current_conn.load() != nullptr; }
 
 void ble_state_changed() {
   if(bt_is_ready()) {
@@ -247,7 +299,14 @@ void ble_settings_changed(gtfog::device_settings const &settings) {
   auto key = k_spin_lock(&pending_settings_lock);
   pending_settings = gtfog::encode(settings);
   k_spin_unlock(&pending_settings_lock, key);
-  k_work_submit(&save_settings_work);
+  k_work_submit(&notify_settings_work);
+  // Bursts (button auto-repeat in motion mode) become one flash write.
+  k_work_reschedule(&save_settings_work, K_SECONDS(2));
+}
+
+void ble_settings_flush() {
+  k_work_cancel_delayable(&save_settings_work); // Does not wait: the system workqueue may be blocked on the controller mutex.
+  save_pending();
 }
 
 void ble_battery_changed(std::uint8_t percent) {
@@ -264,8 +323,7 @@ void ble_charger_changed(gtfog::charger_state state) {
 }
 
 auto ble_accel_samples_per_packet() -> std::size_t {
-  bt_conn *conn = current_conn;
-  return conn ? gtfog::accel_samples_per_packet(bt_gatt_get_mtu(conn)) : 0;
+  return gtfog::accel_samples_per_packet(att_mtu); // 0 without a connection.
 }
 
 void ble_accel_send(std::span<std::uint8_t const> packet) {

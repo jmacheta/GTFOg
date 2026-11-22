@@ -61,6 +61,10 @@ constexpr auto pattern_of(signal s) noexcept -> pattern {
     return {green, 2, 100, 100};
   case signal::battery_warning:
     return {red, 2, 100, 100};
+  case signal::pairing_refused:
+    return {magenta, 2, 100, 100};
+  case signal::fault:
+    return {red, 4, 50, 50};
   case signal::power_off:
     return {cyan, 1, 300, 0};
   }
@@ -80,23 +84,29 @@ void set_color(color c) {
   set_pwm(led_pwm[2], c.blue * 1000u / 255u);
 }
 
+// The pattern state is touched by show() (any thread), indicator_step() (system workqueue) and power_off(); `pattern_lock`
+// guards it. The PWM writes happen outside the lock.
 pattern current_pattern;
 unsigned pattern_phase;
 std::int64_t phase_end_ms; // Uptime at which the phase shown last ends.
+k_spinlock pattern_lock;
 
 void indicator_step(k_work *work);
 K_WORK_DELAYABLE_DEFINE(indicator_work, indicator_step);
 
 void indicator_step(k_work *) {
+  auto key = k_spin_lock(&pattern_lock);
   if(pattern_phase >= 2 * current_pattern.blinks) {
+    k_spin_unlock(&pattern_lock, key);
     set_color(black);
     return;
   }
-  bool lit = pattern_phase % 2 == 0;
-  set_color(lit ? current_pattern.c : black);
-  ++pattern_phase;
-  auto duration_ms = lit ? current_pattern.on_ms : current_pattern.off_ms;
+  auto shown = current_pattern;
+  bool lit = pattern_phase++ % 2 == 0;
+  auto duration_ms = lit ? shown.on_ms : shown.off_ms;
   phase_end_ms = k_uptime_get() + duration_ms;
+  k_spin_unlock(&pattern_lock, key);
+  set_color(lit ? shown.c : black);
   k_work_schedule(&indicator_work, K_MSEC(duration_ms));
 }
 
@@ -133,14 +143,16 @@ public:
 
   void show(signal s) override {
     k_work_cancel_delayable(&indicator_work);
+    auto key = k_spin_lock(&pattern_lock);
     current_pattern = pattern_of(s);
     pattern_phase = 0;
+    k_spin_unlock(&pattern_lock, key);
     k_work_schedule(&indicator_work, K_NO_WAIT);
   }
 
   void settings_changed(device_settings const &s) override {
     ble_settings_changed(s);
-    accelerometer_motion_mode(s.mode == fan_mode::motion);
+    accelerometer_motion_mode(s.follows_motion());
   }
 
   void power_off() override {
@@ -148,15 +160,22 @@ public:
     // The system workqueue may be blocked on the controller mutex, which the caller holds: finish the pattern here and
     // wait for no work item.
     k_work_cancel_delayable(&indicator_work);
-    if(auto left_ms = phase_end_ms - k_uptime_get(); left_ms > 0) {
+    auto key = k_spin_lock(&pattern_lock);
+    auto shown = current_pattern;
+    auto phase = pattern_phase;
+    auto end_ms = phase_end_ms;
+    pattern_phase = 2 * shown.blinks; // Nothing left for a work item that still runs.
+    k_spin_unlock(&pattern_lock, key);
+    if(auto left_ms = end_ms - k_uptime_get(); left_ms > 0) {
       k_msleep(left_ms);
     }
-    for(; pattern_phase < 2 * current_pattern.blinks; ++pattern_phase) {
-      bool lit = pattern_phase % 2 == 0;
-      set_color(lit ? current_pattern.c : black);
-      k_msleep(lit ? current_pattern.on_ms : current_pattern.off_ms);
+    for(; phase < 2 * shown.blinks; ++phase) {
+      bool lit = phase % 2 == 0;
+      set_color(lit ? shown.c : black);
+      k_msleep(lit ? shown.on_ms : shown.off_ms);
     }
     set_color(black);
+    ble_settings_flush(); // In this thread: the system workqueue may be blocked on the controller mutex.
     accelerometer_power_off();
     buttons_arm_wake();
     sys_poweroff();

@@ -23,14 +23,16 @@ constexpr std::uint8_t reg_devid = 0x00, reg_bw_rate = 0x2c, reg_power_ctl = 0x2
 i2c_dt_spec const bus = I2C_DT_SPEC_GET(DT_NODELABEL(accelerometer));
 gpio_dt_spec const power = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), accelerometer_pwr_gpios);
 
-constexpr unsigned poll_ms = 100; // The 32-sample FIFO holds 320 ms at 100 Hz.
+constexpr unsigned poll_ms = 200; // The 32-sample FIFO holds 320 ms at 100 Hz.
 constexpr auto retry_delay = K_SECONDS(10);
 
 std::atomic<bool> streaming{false};
 std::atomic<bool> motion_mode{false};
+std::atomic<bool> shutdown{false}; // Set before System OFF; the thread then drops the power pin and stays down.
 K_SEM_DEFINE(wanted_changed, 0, 1);
+K_SEM_DEFINE(shutdown_done, 0, 1);
 
-auto wanted() -> bool { return streaming || motion_mode; }
+auto wanted() -> bool { return !shutdown && (streaming || motion_mode); }
 
 void power_down() { std::ignore = gpio_pin_configure_dt(&power, GPIO_OUTPUT_INACTIVE); }
 
@@ -61,19 +63,32 @@ void flush_fifo() {
   std::ignore = i2c_reg_write_byte_dt(&bus, reg_fifo_ctl, 0x80);
 }
 
+void sensor_gone() {
+  LOG_ERR("accelerometer lost");
+  with_controller([](gtfog::controller &c) { c.sensor_lost(); });
+}
+
 void accelerometer_thread(void *, void *, void *) {
   std::array<gtfog::accel_sample, gtfog::accel_max_samples> batch{};
   std::array<std::uint8_t, gtfog::accel_header_size + gtfog::accel_sample_size * gtfog::accel_max_samples> packet{};
 
+  using verdict = gtfog::fifo_watchdog::verdict;
+  gtfog::fifo_watchdog watchdog;
   while(true) {
     if(!wanted()) {
-      power_down();
+      power_down(); // The thread owns the pin.
+      if(shutdown) {
+        k_sem_give(&shutdown_done);
+      }
       k_sem_take(&wanted_changed, K_FOREVER);
       continue;
     }
     if(int err = power_up(); err != 0) {
       LOG_ERR("power up: %d", err);
       power_down();
+      if(watchdog.poll(false, gtfog::fifo_watchdog::stall_ms) == verdict::lost) {
+        sensor_gone();
+      }
       k_sem_take(&wanted_changed, retry_delay);
       continue;
     }
@@ -91,10 +106,16 @@ void accelerometer_thread(void *, void *, void *) {
       std::size_t per_packet = streaming ? ble_accel_samples_per_packet() : 0;
       std::optional<gtfog::activity_level> level;
       std::uint8_t status = 0;
-      std::ignore = i2c_reg_read_byte_dt(&bus, reg_fifo_status, &status);
-      for(unsigned i = 0; i < (status & 0x3fu); ++i) {
+      bool healthy = i2c_reg_read_byte_dt(&bus, reg_fifo_status, &status) == 0 && gtfog::fifo_entries(status) != 0;
+      if(gtfog::fifo_overflowed(status)) {
+        LOG_WRN("FIFO overflow");
+        flush_fifo(); // Samples were lost; start over.
+        status = 0;
+      }
+      for(unsigned i = 0; i < gtfog::fifo_entries(status); ++i) {
         std::array<std::uint8_t, 6> raw{};
         if(i2c_burst_read_dt(&bus, reg_datax0, raw.data(), raw.size()) != 0) {
+          healthy = false;
           continue;
         }
         gtfog::accel_sample sample{static_cast<std::int16_t>(raw[0] | raw[1] << 8), static_cast<std::int16_t>(raw[2] | raw[3] << 8),
@@ -115,6 +136,14 @@ void accelerometer_thread(void *, void *, void *) {
       }
       if(motion_mode && level) {
         with_controller([&](gtfog::controller &c) { c.observe(*level); });
+      }
+      auto v = watchdog.poll(healthy, poll_ms);
+      if(v == verdict::lost) {
+        sensor_gone();
+      }
+      if(v != verdict::ok) {
+        LOG_WRN("no samples, power cycling the sensor");
+        break; // Back to power_up().
       }
       k_msleep(poll_ms);
     }
@@ -138,5 +167,9 @@ void accelerometer_motion_mode(bool on) {
 void accelerometer_power_off() {
   streaming = false;
   motion_mode = false;
-  power_down();
+  shutdown = true;
+  k_sem_give(&wanted_changed);
+  // The thread may be inside power_up() (0.6 s) or wait for the controller mutex held by our caller; do not wait for ever.
+  std::ignore = k_sem_take(&shutdown_done, K_SECONDS(1));
+  power_down(); // Fallback when the thread did not answer in time.
 }

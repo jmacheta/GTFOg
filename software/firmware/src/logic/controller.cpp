@@ -16,7 +16,7 @@ auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_siz
 }
 
 auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings> {
-  if((bytes.size() != settings_size && bytes.size() != settings_size_v2 && bytes.size() != settings_size_v1) || (bytes[0] & ~3U) != 0) {
+  if(!is_settings_size(bytes.size()) || (bytes[0] & ~3U) != 0) {
     return std::nullopt;
   }
   device_settings s{.stealth = (bytes[0] & 1U) != 0, .transport_lock = (bytes[0] & 2U) != 0, .auto_off_minutes = bytes[1]};
@@ -51,6 +51,19 @@ void controller::power_on() {
   set_strobe(false);
 }
 
+void controller::check_start(battery_status status) {
+  if(!battery_allows_start(status)) {
+    power_off(signal::low_battery);
+  }
+}
+
+void controller::sensor_lost() {
+  level = activity_level::still;
+  rising_s = falling_s = 0;
+  apply_fan(); // Also tells the phone about the level.
+  indicate(signal::fault);
+}
+
 void controller::handle(button_event event) {
   idle_seconds = 0;
   if(cfg.transport_lock && event.action != button_action::power_off && event.action != button_action::unlock) {
@@ -73,6 +86,8 @@ void controller::handle(button_event event) {
   case button_action::unlock:
     if(cfg.transport_lock) {
       cfg.transport_lock = false;
+      apply_fan();
+      apply_strobe();
       out.settings_changed(cfg);
       indicate(signal::unlocked);
     } else {
@@ -83,7 +98,7 @@ void controller::handle(button_event event) {
 }
 
 void controller::change_fan_speed(int delta) {
-  int wanted = static_cast<int>(fan_speed()) + delta;
+  int wanted = static_cast<int>(target_fan()) + delta;
   set_fan_speed(static_cast<unsigned>(std::clamp(wanted, 0, 100)));
   bool at_limit = wanted <= 0 || wanted >= 100;
   indicate(at_limit ? signal::speed_limit : (delta > 0 ? signal::speed_up : signal::speed_down));
@@ -107,6 +122,7 @@ void controller::update_settings(device_settings s) {
   }
   cfg = s;
   apply_fan();
+  apply_strobe(); // Turning the lock on stops them.
   out.settings_changed(cfg);
 }
 
@@ -137,7 +153,7 @@ void controller::observe(activity_level raw) {
 
 void controller::set_strobe(bool on) {
   strobe_on = on;
-  out.set_strobe(on);
+  apply_strobe();
 }
 
 void controller::handle(battery_status status) {
@@ -155,7 +171,9 @@ void controller::handle(battery_status status) {
 }
 
 void controller::elapsed(unsigned seconds, bool phone_connected) {
-  if(fan_speed() != 0 || strobe_on || phone_connected) {
+  // In motion mode the fan always runs at some speed, so only movement counts as use.
+  bool fan_in_use = cfg.mode == fan_mode::motion ? level != activity_level::still && !cfg.transport_lock : fan_speed() != 0;
+  if(fan_in_use || strobe() || phone_connected) {
     idle_seconds = 0;
     return;
   }

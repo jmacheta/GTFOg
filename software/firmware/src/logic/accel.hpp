@@ -27,8 +27,41 @@ constexpr std::size_t accel_max_samples = 40; // Fills a 247-byte ATT MTU.
   return fit < accel_max_samples ? fit : accel_max_samples;
 }
 
-// Writes the packet into `out` and returns its length; `out` must hold accel_header_size + 6 * samples.size() bytes.
+// Writes the packet into `out` and returns its length; 0 (nothing written) when `out` is smaller than accel_header_size +
+// 6 * samples.size() bytes.
 auto pack_accel(std::uint16_t seq, std::uint8_t rate_hz, std::span<accel_sample const> samples, std::span<std::uint8_t> out) noexcept -> std::size_t;
+
+// ADXL345 FIFO_STATUS: bits 0..5 hold the number of samples; 32 means the FIFO is full and the next one overwrites the oldest.
+constexpr unsigned fifo_capacity = 32;
+[[nodiscard]] constexpr auto fifo_entries(std::uint8_t status) noexcept -> unsigned { return status & 0x3fu; }
+[[nodiscard]] constexpr auto fifo_overflowed(std::uint8_t status) noexcept -> bool { return fifo_entries(status) >= fifo_capacity; }
+
+// Notices a sensor that stopped delivering: a poll that fails or finds the FIFO empty is unhealthy; after `stall_ms` of
+// them the caller power-cycles the sensor, and the third such recovery in a row gives up (reported once).
+class fifo_watchdog {
+public:
+  static constexpr unsigned stall_ms = 1000;
+  static constexpr unsigned max_recoveries = 3;
+  enum class verdict { ok, recover, lost };
+
+  // `elapsed_ms` since the previous poll.
+  [[nodiscard]] auto poll(bool healthy, unsigned elapsed_ms) noexcept -> verdict {
+    if(healthy) {
+      bad_ms = recoveries = 0;
+      return verdict::ok;
+    }
+    bad_ms += elapsed_ms;
+    if(bad_ms < stall_ms) {
+      return verdict::ok;
+    }
+    bad_ms = 0;
+    return ++recoveries == max_recoveries ? verdict::lost : verdict::recover;
+  }
+
+private:
+  unsigned bad_ms{0};
+  unsigned recoveries{0};
+};
 
 enum class activity_level : std::uint8_t { still = 0, walking = 1, running = 2 };
 

@@ -78,3 +78,32 @@ ZTEST(accel, test_activity_ignores_gravity_and_reports_every_second) {
   }
   zassert_equal(reports, 6); // 600 samples.
 }
+
+ZTEST(accel, test_pack_refuses_a_buffer_that_is_too_small) {
+  std::array<accel_sample, 2> samples{};
+  std::array<std::uint8_t, accel_header_size + 2 * accel_sample_size - 1> small{};
+  small.fill(0xaa);
+  zassert_equal(pack_accel(1, 100, samples, small), 0);
+  zassert_equal(small[0], 0xaa, "nothing written");
+}
+
+ZTEST(accel, test_fifo_status_decoding) {
+  zassert_equal(fifo_entries(0x9f), 0x1f);
+  zassert_false(fifo_overflowed(0x1f));
+  zassert_true(fifo_overflowed(0x20));
+}
+
+ZTEST(accel, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_third) {
+  fifo_watchdog dog;
+  using verdict = fifo_watchdog::verdict;
+  for(int i = 0; i != 4; ++i) {
+    zassert_equal(dog.poll(false, 200), verdict::ok);
+  }
+  zassert_equal(dog.poll(false, 200), verdict::recover);
+  zassert_equal(dog.poll(true, 200), verdict::ok); // A healthy poll clears the history.
+  for(int round = 0; round != 2; ++round) {
+    zassert_equal(dog.poll(false, 1000), verdict::recover);
+  }
+  zassert_equal(dog.poll(false, 1000), verdict::lost);
+  zassert_equal(dog.poll(false, 1000), verdict::recover, "lost is reported once");
+}

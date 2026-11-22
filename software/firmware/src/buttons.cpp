@@ -37,17 +37,24 @@ auto setup(gpio_dt_spec const &button, gpio_callback &callback) -> int {
   return gpio_add_callback_dt(&button, &callback);
 }
 
+int init_error = 0;
+
 auto buttons_init() -> int {
-  if(int err = setup(plus, plus_callback); err != 0) {
-    return err;
-  }
-  return setup(minus, minus_callback);
+  init_error = setup(plus, plus_callback);
+  init_error = init_error ?: setup(minus, minus_callback);
+  return init_error;
 }
 
 SYS_INIT(buttons_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 void buttons_thread(void *, void *, void *) {
   gtfog::button_gestures gestures;
+  if(init_error != 0) {
+    LOG_ERR("buttons: %d", init_error);
+    // ponytail: no interrupts, so only the polling below could work; show the fault once, after the power-on signal.
+    k_sleep(K_SECONDS(2));
+    with_controller([](gtfog::controller &c) { c.report(gtfog::signal::fault); });
+  }
   while(true) {
     auto now = std::chrono::milliseconds{k_uptime_get()};
     if(auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now)) {

@@ -14,7 +14,7 @@ namespace {
 
 // ponytail: VBAT reaches AIN4 through a 47k/47k divider (POWER sheet); calibrate against a multimeter.
 constexpr int vbat_divider = 2;
-constexpr unsigned sample_interval_s = 10; // Also the auto-off resolution.
+constexpr unsigned sample_interval_s = 10; // The auto-off resolution.
 constexpr std::uint32_t watchdog_timeout_ms = 30'000;
 
 device const *const watchdog = DEVICE_DT_GET(DT_NODELABEL(wdt0));
@@ -67,6 +67,10 @@ auto read_millivolts() -> int {
   return millivolts * vbat_divider;
 }
 
+gtfog::battery_status make_status(int millivolts) {
+  return {millivolts, gtfog::decode_charger_state(gpio_pin_get_dt(&stat1) > 0, gpio_pin_get_dt(&stat2) > 0)};
+}
+
 void battery_thread(void *, void *, void *) {
   if(int err = watchdog_start(); err != 0) {
     LOG_ERR("watchdog: %d", err);
@@ -76,18 +80,25 @@ void battery_thread(void *, void *, void *) {
   int setup_err = setup();
   if(setup_err != 0) {
     LOG_ERR("setup: %d", setup_err);
+    // ponytail: the low-battery cutoff and the BAS value are gone; show it once, after the power-on signal.
+    k_sleep(K_SECONDS(2));
+    with_controller([](gtfog::controller &c) { c.report(gtfog::signal::fault); });
   }
+  std::int64_t counted_ms = k_uptime_get();
   while(true) {
+    // The loop runs a little slower than its period; count the real time, keeping the remainder.
+    auto idle_s = static_cast<unsigned>((k_uptime_get() - counted_ms) / 1000);
+    counted_ms += std::int64_t{idle_s} * 1000;
     int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
     if(millivolts < 0) {
       LOG_WRN("ADC read: %d", millivolts);
-      with_controller([](gtfog::controller &c) { c.elapsed(sample_interval_s, ble_connected()); });
+      with_controller([&](gtfog::controller &c) { c.elapsed(idle_s, ble_connected()); });
     } else {
-      gtfog::battery_status status{millivolts, gtfog::decode_charger_state(gpio_pin_get_dt(&stat1) > 0, gpio_pin_get_dt(&stat2) > 0)};
+      auto status = make_status(millivolts);
       LOG_DBG("%d mV, charger %d", millivolts, static_cast<int>(status.charger));
       auto percent = with_controller([&](gtfog::controller &c) {
         c.handle(status);
-        c.elapsed(sample_interval_s, ble_connected());
+        c.elapsed(idle_s, ble_connected());
         return c.battery_level();
       });
       ble_battery_changed(percent);
@@ -103,3 +114,12 @@ void battery_thread(void *, void *, void *) {
 K_THREAD_DEFINE(battery, 1024, battery_thread, nullptr, nullptr, nullptr, 7, 0, 500);
 
 } // namespace
+
+// The setup is repeated by the battery thread, which is harmless; the ADC and the pins are only read.
+auto battery_sample() -> std::optional<gtfog::battery_status> {
+  if(setup() != 0) {
+    return std::nullopt;
+  }
+  int millivolts = read_millivolts();
+  return millivolts < 0 ? std::nullopt : std::optional{make_status(millivolts)};
+}

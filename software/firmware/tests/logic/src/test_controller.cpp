@@ -141,8 +141,12 @@ ZTEST(controller, test_transport_lock_keeps_fan_and_strobe_off) {
   zassert_equal(out.fan, 0);
   zassert_false(out.strobe);
   zassert_equal(out.signals.back(), signal::locked);
-  c.set_fan_speed(40); // The phone still controls the device.
-  zassert_equal(out.fan, 40);
+  c.set_fan_speed(40); // The phone sets the target, but the lock keeps the outputs off.
+  c.set_strobe(true);
+  zassert_equal(out.fan, 0);
+  zassert_false(out.strobe);
+  zassert_equal(c.fan_speed(), 0);
+  zassert_false(c.strobe());
   c.handle(button_event{button_action::power_off});
   zassert_true(out.powered_off);
   zassert_equal(out.signals.back(), signal::power_off);
@@ -411,4 +415,121 @@ ZTEST(controller, test_pwm_pulse_does_not_overflow) {
   static_assert(pwm_pulse_ns(5'000'000, 830) == 4'150'000); // 32-bit math wrapped from 83 %.
   static_assert(pwm_pulse_ns(5'000'000, 0) == 0);
   static_assert(pwm_pulse_ns(1'000'000, 500) == 500'000);
+}
+
+ZTEST(controller, test_transport_lock_keeps_the_fan_off_in_motion_mode_and_unlock_restores_it) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.transport_lock = true, .mode = fan_mode::motion, .motion_speed = {20, 50, 80}});
+  c.power_on();
+  zassert_equal(out.fan, 0);
+  zassert_false(c.settings().follows_motion());
+  c.set_strobe(true);
+  zassert_false(out.strobe);
+  c.handle(button_event{button_action::unlock});
+  zassert_equal(out.fan, 20);
+  zassert_true(out.strobe, "the strobe target comes back");
+  zassert_true(c.settings().follows_motion());
+}
+
+ZTEST(controller, test_turning_the_lock_on_stops_a_running_fan_and_strobe) {
+  fake_outputs out;
+  controller c{out};
+  c.power_on();
+  c.set_fan_speed(60);
+  c.set_strobe(true);
+  zassert_equal(out.fan, 60);
+  zassert_true(out.strobe);
+  c.update_settings({.transport_lock = true});
+  zassert_equal(out.fan, 0);
+  zassert_false(out.strobe);
+  c.update_settings({.transport_lock = false});
+  zassert_equal(out.fan, 60);
+  zassert_true(out.strobe);
+}
+
+ZTEST(controller, test_motion_mode_auto_off_counts_time_at_level_still) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5, .motion_speed = {20, 50, 80}});
+  c.power_on();
+  zassert_equal(out.fan, 20);
+  c.elapsed(50, false);
+  c.handle(button_event{button_action::minus, 1}); // A button press restarts the count.
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, true); // So does a phone.
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  feed(c, activity_level::walking, 2); // So does movement.
+  c.elapsed(120, false);
+  zassert_false(out.powered_off);
+  feed(c, activity_level::still, 5);
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, false);
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_sensor_lost_runs_the_still_speed_and_reports_still) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.mode = fan_mode::motion, .motion_speed = {20, 50, 80}});
+  c.power_on();
+  feed(c, activity_level::running, 2);
+  zassert_equal(out.fan, 80);
+  c.sensor_lost();
+  zassert_equal(out.fan, 20);
+  zassert_equal(c.activity_code(), 0);
+  zassert_equal(out.signals.back(), signal::fault);
+}
+
+ZTEST(controller, test_report_respects_stealth) {
+  fake_outputs out;
+  controller c{out};
+  c.report(signal::pairing_refused);
+  zassert_equal(out.signals.back(), signal::pairing_refused);
+  out.signals.clear();
+  c.configure({.stealth = true});
+  c.report(signal::fault);
+  zassert_true(out.signals.empty());
+}
+
+ZTEST(controller, test_low_battery_at_start_powers_off_without_running_the_fan) {
+  fake_outputs out;
+  controller c{out};
+  c.check_start({3399, charger_state::not_charging});
+  zassert_true(out.powered_off);
+  zassert_equal(out.signals.back(), signal::low_battery);
+  zassert_equal(out.fan, 0);
+
+  fake_outputs ok;
+  controller d{ok};
+  d.check_start({3400, charger_state::not_charging});
+  d.check_start({3000, charger_state::charging});
+  zassert_false(ok.powered_off);
+}
+
+ZTEST(controller, test_settings_changed_is_called_once_per_change) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.mode = fan_mode::motion});
+  c.power_on();
+  zassert_equal(out.saved.size(), 0);
+  c.handle(button_event{button_action::plus, 1});
+  zassert_equal(out.saved.size(), 1);
+  c.set_fan_speed(30);
+  zassert_equal(out.saved.size(), 2);
+  c.update_settings({});
+  zassert_equal(out.saved.size(), 3);
+}
+
+ZTEST(controller, test_value_and_length_checks) {
+  zassert_true(is_fan_percent(0));
+  zassert_true(is_fan_percent(100));
+  zassert_false(is_fan_percent(101));
+  zassert_true(is_strobe_value(1));
+  zassert_false(is_strobe_value(2));
+  zassert_true(is_settings_size(8) && is_settings_size(6) && is_settings_size(2));
+  zassert_false(is_settings_size(0) || is_settings_size(7) || is_settings_size(9));
 }

@@ -29,7 +29,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | Strobe | P0.20 | PWM1 out 0 | Normal polarity, 1 ms period |
 | I2C SCL | P0.00 | TWIM0 | Standard rate, pull-up |
 | I2C SDA | P0.01 | TWIM0 | Standard rate, pull-up |
-| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345; the firmware keeps it low unless a phone streams or motion mode is on |
+| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345; the firmware keeps it low unless a phone streams or motion mode is on (and the transport lock is off); the accelerometer thread drives it |
 | Accelerometer INT1 | P0.05 | GPIO | Unused by the firmware |
 | Accelerometer INT2 | P0.04 | GPIO | Unused by the firmware |
 | Charger STAT1 | P0.03 | GPIO in | Pull-up |

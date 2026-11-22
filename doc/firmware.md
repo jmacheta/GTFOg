@@ -22,10 +22,10 @@ Board layer (`src/`):
 | `app.hpp` | `with_controller(f)`: runs `f(controller &)` under a mutex; declarations shared by the board files |
 | `board.cpp` | `board_outputs` (implements `outputs`): PWM fan, PWM strobe and RGB LED patterns (`k_work`), System OFF; owns the `controller` |
 | `buttons.cpp` | Button GPIO interrupts, `buttons` thread feeding `button_gestures`, wake-up arming |
-| `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time (also when the ADC fails) and feeds the watchdog |
+| `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog; `battery_sample()` for the boot check |
 | `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service (the mcumgr SMP service comes from NCS) |
-| `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 only while a phone streams or motion mode is on; feeds the activity classifier and the stream |
-| `main.cpp` | `main()`: `power_on`, `ble_init`, confirms the running image once Bluetooth is up; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
+| `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 only while a phone streams or motion mode is on (the thread owns the power pin); feeds the activity classifier and the stream; power-cycles a silent sensor |
+| `main.cpp` | `main()`: loads the settings (`app_settings_load`), checks the battery (`check_start`), `ble_init`, `power_on`, confirms the running image once Bluetooth is up; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
 
 ## Threads
 
@@ -34,7 +34,7 @@ Board layer (`src/`):
 | `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Powers the controller on, starts BLE, confirms the image, returns |
 | `buttons` | 5 | 1024 B | Waits for a pin change; polls every 20 ms while a button is down |
 | `battery` | 7 | 1024 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
-| `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 100 ms |
+| `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
 The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
 (2048 B stack). Every thread reaches the controller through `with_controller`.
@@ -46,8 +46,10 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 
 | Input | Effect |
 | --- | --- |
-| `power_on()` | Signal `power_on`, strobe off, fan 0 (in motion mode the still speed, level still) |
+| `check_start(status)` (`main()`, one ADC sample before `power_on`) | Below 3400 mV and not charging: signal `low_battery` and power off at once, the fan never starts (`battery_allows_start`). No ADC: the device starts |
+| `power_on()` | Signal `power_on`, strobe off, fan 0 (in motion mode the still speed, level still; under the transport lock always 0) |
 | Any button while `transport_lock` is on | Signal `locked`, nothing else; only `power_off` and `unlock` still work |
+| `transport_lock` on | `fan_speed()` is 0 and `strobe()` false in both modes, also for Bluetooth writes and `power_on`; turning the lock on (Bluetooth) stops a running fan and strobe. The targets are kept, so unlocking restores them |
 | Button `plus` / `minus` | Fan speed `+steps * fan_step` / `-steps * fan_step`, clamped to 0..100, on the target of the current activity level in motion mode; signal `speed_up`, `speed_down`, or `speed_limit` when the result reaches 0 or 100 |
 | Button `unlock` | While locked: clears `transport_lock`, stores the settings, signal `unlocked`. Otherwise the same as `plus` with 1 step |
 | Button `toggle_strobe` | Strobe on or off |
@@ -55,15 +57,17 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal. In motion mode it sets the target of the current activity level and stores the settings |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
 | `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off. Otherwise signal `battery_warning` once when the level reaches 10 % or less, armed again above 15 % |
-| `elapsed(seconds, phone_connected)` (every 10 s) | Counts idle time: fan 0, strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off` |
+| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off` |
+| `sensor_lost()` (accelerometer) | Level still (so motion mode runs at the still speed and the activity code is 0), signal `fault` |
+| `report(signal)` (board layer) | Shows the signal unless stealth: `pairing_refused`, `fault` |
 | `observe(level)` (accelerometer, once per second, motion mode) | Raw activity level of the last second; may switch the level, see [Motion mode](#motion-mode) |
 | `update_settings(settings)` (BLE) | Stores the settings, calls `outputs::settings_changed` (saved to flash and notified by the board), applies the fan mode |
 | `configure(settings)` (flash, at boot) | Stores the settings only |
 
 ### Settings
 
-`device_settings`, written over BLE and kept in flash under the settings key `gtfog/cfg` (loaded before `power_on()`, so
-stealth mode also hides the power-on signal). Eight bytes (`encode`, `decode_settings`); the 6-byte format of firmware 0.3.1 (byte 5 is the still speed, the other
+`device_settings`, written over BLE and kept in flash under the settings key `gtfog/cfg` (loaded by `app_settings_load()` at the start of `main()`, independent of
+Bluetooth, so a `bt_enable` failure keeps lock and stealth, and stealth also hides the power-on signal). Eight bytes (`encode`, `decode_settings`); the 6-byte format of firmware 0.3.1 (byte 5 is the still speed, the other
 speeds at their defaults) and the 2-byte format of firmware 0.2.0 (bytes 0 and 1, the rest at their defaults) are still
 accepted on writes and in flash, anything else is rejected:
 
@@ -79,12 +83,13 @@ accepted on writes and in flash, anything else is rejected:
 | 7 | Motion mode: fan speed in % while running, 0..100, default 100 |
 
 A write from Bluetooth (or the unlock gesture) goes through `controller::update_settings`; `board_outputs` hands the
-copy to `ble_settings_changed`, which saves it in flash and notifies the characteristic from the system workqueue, so the
-Bluetooth thread never waits for flash. Values loaded at boot are not saved again.
+copy to `ble_settings_changed`, which notifies the characteristic at once (system workqueue) and saves it in flash 2 s after the last change, so bursts
+(button auto-repeat in motion mode) become one write and the Bluetooth thread never waits for flash. A save is skipped when the
+bytes equal the stored ones, and `power_off()` saves a pending copy in its own thread. Values loaded at boot are not saved again.
 
 ### Motion mode
 
-With fan mode 1 the accelerometer is powered and read every 100 ms. `activity_classifier` takes the standard deviation of
+With fan mode 1 (and no transport lock) the accelerometer is powered and read every 200 ms. `activity_classifier` takes the standard deviation of
 the acceleration magnitude over each second (100 samples) and reports a raw level: below 80 mg still, below 300 mg walking,
 else running (`walk_threshold_milli_g`, `run_threshold_milli_g`; guesses, to calibrate with Debug-tab recordings). The
 controller (`observe`) keeps the current level, starting at still: it goes up when the raw level has been above it for 2
@@ -92,7 +97,7 @@ consecutive seconds (to the lowest level seen in those seconds), and down to the
 current level for `motion_delay_s` seconds; a second at the current level restarts the countdown. The fan runs at the target
 of the current level (`motion_speed[level]`, bytes 5..7). The buttons and Bluetooth fan writes change the target of the
 current level and store the settings, so `fan_speed()` and the fan characteristic are that target. Manual mode keeps its own
-target and ignores the activity; switching mode resets the level to still.
+target and ignores the activity; switching mode resets the level to still. If the sensor stays silent (see [Accelerometer](#accelerometer)) the level is forced to still.
 
 ## Buttons
 
@@ -137,6 +142,8 @@ and blinks; a new signal replaces the running one.
 | `locked` | Red | 1 | 50 ms |
 | `unlocked` | Green | 2 | 100 ms / 100 ms |
 | `battery_warning` | Red | 2 | 100 ms / 100 ms |
+| `pairing_refused` | Magenta | 2 | 100 ms / 100 ms |
+| `fault` | Red | 4 | 50 ms / 50 ms |
 | `power_off` | Cyan | 1 | 300 ms |
 
 ## Battery and charger
@@ -166,7 +173,7 @@ response. Advertising restarts after a disconnect.
 | | | Strobe `a7f00003-...`: uint8, 0 or 1 | read, write, notify |
 | | | Accelerometer `a7f00004-...`: stream, see below | notify |
 | | | Charger `a7f00005-...`: uint8, 0 not charging, 1 charging, 3 fault (2 is no longer sent) | read, notify |
-| | | Settings `a7f00006-...`: 6 bytes, see [Settings](#settings) | read, write, notify |
+| | | Settings `a7f00006-...`: 8 bytes, see [Settings](#settings) | read, write, notify |
 | | | Fan state `a7f00007-...`: 2 bytes, [0] speed the fan runs at in %, [1] activity level 0 still, 1 walking, 2 running, 255 manual mode; notified when either changes | read, notify |
 | mcumgr SMP | standard SMP UUID | Firmware update, see [Firmware update](#firmware-update-and-mcuboot) | write, notify |
 | Battery Service | standard | Battery level, updated every 10 s | per Zephyr BAS |
@@ -177,7 +184,7 @@ in settings (NVS, `storage_partition`). Writes must have the exact length (1 byt
 buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
 (`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
 
-New pairings are accepted only in the first 3 minutes after boot (`pairing_accept` in `ble.cpp`; every wake from System OFF is a boot); later requests are refused with `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`. Bonded phones reconnect at any time. Pairing stays Just Works.
+New pairings are accepted only in the first 3 minutes after boot (`pairing_accept` in `ble.cpp`; every wake from System OFF is a boot); later requests are refused with `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`. Bonded phones reconnect at any time. A refused request shows the `pairing_refused` signal (posted by a `k_work`, as the callback must not take the controller mutex). Pairing stays Just Works.
 
 ## Accelerometer
 
@@ -185,10 +192,16 @@ The ADXL345 is accessed over raw I2C (no Zephyr sensor driver, `CONFIG_SENSOR` o
 only while a phone subscribes to characteristic `a7f00004` or motion mode is on; otherwise the power pin (P1.09) is low.
 Each power-up drives the pin low for 100 ms, then high, waits 500 ms, checks the device ID (0xE5) on I2C0 (address 0x53)
 and sets 100 Hz, +-16 g full resolution and FIFO stream mode (a failure is retried after 10 s). While active it reads
-the FIFO every 100 ms (the 32-sample FIFO holds 320 ms), feeds `activity_classifier` and, in motion mode, `controller::observe` once per second,
+the FIFO every 200 ms (the 32-sample FIFO holds 320 ms), feeds `activity_classifier` and, in motion mode, `controller::observe` once per second,
 and sends notifications while subscribed; the FIFO is flushed on each new subscription. The power is cut when
 neither is needed and by `accelerometer_power_off()` before System OFF. INT1 (P0.05) and INT2 (P0.04) are in the
 devicetree and unused.
+
+Faults: a poll that fails or finds the FIFO empty counts as unhealthy (`fifo_watchdog`); after 1 s of them the sensor is power-cycled
+(`power_up()` again; a failed power-up counts too). The third such recovery in a row calls `controller::sensor_lost()` once (signal
+`fault`, level still, logged) and the retries go on. A full FIFO (32 entries, `fifo_overflowed`) is flushed and polling continues.
+The thread owns the power pin: `accelerometer_power_off()` sets a shutdown flag, wakes the thread and waits at most 1 s for it to
+drive the pin low, then drives it low itself.
 
 Notification frame (little endian, `pack_accel`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
 then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accel_samples_per_packet`). A full
@@ -199,7 +212,7 @@ in `ble_test.py`.
 
 `board_outputs::power_off()` runs under the controller mutex, so it waits for no work item: it cancels the LED pattern
 and plays the rest of it itself with `k_msleep` (the system workqueue may be blocked on the mutex), turns the LED off,
-cuts the accelerometer power, waits until both buttons are released (at most 10 s), arms both as level-active wake
+saves a pending settings change (`ble_settings_flush`), cuts the accelerometer power, waits until both buttons are released (at most 10 s), arms both as level-active wake
 sources and calls `sys_poweroff()` (System OFF). A press wakes the chip through a reset.
 
 ## Watchdog
@@ -227,7 +240,7 @@ smpmgr --ble <address> os reset
   `smpmgr upgrade` uploads and resets but does not mark the image, so it does not install it.
 - Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`) only after
   Bluetooth initialized; an unconfirmed image is reverted by MCUboot on the next reset (verified on hardware both ways).
-- The image version comes from `software/firmware/VERSION` (0.2.0). Downgrade prevention rejects an older or equal
+- The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older or equal
   image, so raise it for every update.
 - Recovery: MCUboot has serial recovery over USB CDC ACM (mcumgr protocol, VID:PID `1209:EACD`, manufacturer
   `elmaczete_customs`, product `GTFOg bootloader`). Hold the plus button for more than 1 s (`CONFIG_BOOT_SERIAL_DETECT_DELAY=1000`, so a normal press that wakes the device does not enter recovery) while the device wakes or is plugged in (devicetree
@@ -238,8 +251,9 @@ smpmgr --ble <address> os reset
   startup MCUboot turns the fan, the RGB LED and the strobe off; while it installs an update the red strobe blinks at
   5 Hz (hardware PWM, 200 ms period) and stops before the application starts.
 - Boards with an MCUboot built for the old flash map need the new MCUboot over SWD once.
-- Images are signed with the public MCUboot development key (`root-rsa-2048`): anyone can sign an image the bootloader
-  accepts; see [Release signing key](design/build_and_tooling.md#release-signing-key).
+- Images are signed with the public MCUboot development key (`root-rsa-2048`) in CI and development builds: anyone can sign an image
+  the bootloader accepts. Release: build with `-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=/path/outside/repo/key.pem` and flash the new MCUboot
+  over SWD once; see [Release signing key](design/build_and_tooling.md#release-signing-key).
 
 ## Logging
 
@@ -254,4 +268,5 @@ logging off.
 - MCUboot USB serial recovery is not tested on hardware.
 - BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
   host receives it, so its RF path or 32 MHz crystal is suspect.
-- The MCUboot signing key is the public development key; a private key is needed before devices are given out.
+- Release builds need the private signing key (see above); pairing is Just Works within the first 3 minutes after every wake, so anyone in range can pair then.
+- Hardware to verify: sensor recovery and loss handling, the 200 ms FIFO poll (no overflow), the boot battery check, the `fault` and `pairing_refused` patterns.

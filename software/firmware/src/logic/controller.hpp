@@ -22,6 +22,8 @@ enum class signal {
   locked,          // A button did nothing because of the transport lock.
   unlocked,        // The unlock gesture cleared the transport lock.
   battery_warning, // The battery is nearly empty; the device keeps running.
+  pairing_refused, // A new phone tried to pair after the pairing window closed.
+  fault,           // A part (buttons, ADC, accelerometer) failed for good; the device keeps running without it.
   power_off,       // Last, right before power_off(); the board waits for it to finish.
 };
 
@@ -40,6 +42,9 @@ struct device_settings {
   std::uint8_t motion_delay_s{60};                       // Motion mode: seconds of lower activity before the fan slows down, 5..255.
   std::array<std::uint8_t, 3> motion_speed{20, 50, 100}; // Motion mode: fan speed in % while still, walking, running, 0..100.
 
+  // The accelerometer is only needed while the fan follows it; the transport lock keeps the fan off.
+  [[nodiscard]] constexpr auto follows_motion() const noexcept -> bool { return mode == fan_mode::motion && !transport_lock; }
+
   friend auto operator==(device_settings const &, device_settings const &) -> bool = default;
 };
 
@@ -49,6 +54,12 @@ struct device_settings {
 constexpr std::size_t settings_size = 8;
 constexpr std::size_t settings_size_v2 = 6;
 constexpr std::size_t settings_size_v1 = 2;
+[[nodiscard]] constexpr auto is_settings_size(std::size_t len) noexcept -> bool {
+  return len == settings_size || len == settings_size_v2 || len == settings_size_v1;
+}
+// Values a phone may write to the fan and strobe characteristics.
+[[nodiscard]] constexpr auto is_fan_percent(unsigned value) noexcept -> bool { return value <= 100; }
+[[nodiscard]] constexpr auto is_strobe_value(unsigned value) noexcept -> bool { return value <= 1; }
 [[nodiscard]] auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size>;
 [[nodiscard]] auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings>;
 
@@ -94,6 +105,12 @@ public:
   void handle(battery_status status);
   // Settings loaded from flash.
   void configure(device_settings s) noexcept { cfg = s; }
+  // The battery sample taken at boot: powers off at once, without starting the fan, when it is too low to run.
+  void check_start(battery_status status);
+  // The status LED shows `s` (unless stealth); for the board layer's own events.
+  void report(signal s) { indicate(s); }
+  // The accelerometer does not answer any more: motion mode runs at the still speed.
+  void sensor_lost();
   // Settings written by the user (Bluetooth): stored through `outputs::settings_changed`.
   void update_settings(device_settings s);
   // Activity measured over one second of accelerometer data; only used in motion mode.
@@ -101,19 +118,22 @@ public:
   // Counts idle time for the auto-off; call it periodically with the time since the last call.
   void elapsed(unsigned seconds, bool phone_connected);
 
-  // What the fan runs at: the manual target, or in motion mode the target of the current activity level.
-  [[nodiscard]] auto fan_speed() const noexcept -> unsigned {
-    return cfg.mode == fan_mode::motion ? cfg.motion_speed[static_cast<unsigned>(level)] : fan;
-  }
+  // What the fan runs at: the manual target, or in motion mode the target of the current activity level; 0 while the
+  // transport lock is on (the targets are kept).
+  [[nodiscard]] auto fan_speed() const noexcept -> unsigned { return cfg.transport_lock ? 0 : target_fan(); }
   // The current activity level for Bluetooth: 0 still, 1 walking, 2 running, 255 in manual mode.
   [[nodiscard]] auto activity_code() const noexcept -> std::uint8_t { return cfg.mode == fan_mode::motion ? static_cast<std::uint8_t>(level) : 255; }
-  [[nodiscard]] auto strobe() const noexcept -> bool { return strobe_on; }
+  [[nodiscard]] auto strobe() const noexcept -> bool { return strobe_on && !cfg.transport_lock; }
   [[nodiscard]] auto battery_level() const noexcept -> std::uint8_t { return battery; }
   [[nodiscard]] auto settings() const noexcept -> device_settings { return cfg; }
 
 private:
   void change_fan_speed(int delta);
+  [[nodiscard]] auto target_fan() const noexcept -> unsigned {
+    return cfg.mode == fan_mode::motion ? cfg.motion_speed[static_cast<unsigned>(level)] : fan;
+  }
   void apply_fan() { out.set_fan(fan_speed()); }
+  void apply_strobe() { out.set_strobe(strobe()); }
   void indicate(signal s);
   void power_off(signal s);
 

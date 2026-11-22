@@ -8,14 +8,19 @@
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 int main() {
-  // Bluetooth first: it loads the settings, and stealth mode decides whether power_on() lights the LED.
+  // The settings first (stealth decides whether the LED lights up), without Bluetooth.
+  app_settings_load();
+  // A cell that only recovered above the cutoff at rest must not run the fan again: power off before anything starts.
+  if(auto sample = battery_sample()) {
+    with_controller([&](gtfog::controller &c) { c.check_start(*sample); }); // Does not return when the battery is low.
+  }
   int ble_err = ble_init();
   if(ble_err != 0) {
     LOG_ERR("Bluetooth: %d", ble_err);
   }
   accelerometer_motion_mode(with_controller([](gtfog::controller &c) {
     c.power_on();
-    return c.settings().mode == gtfog::fan_mode::motion;
+    return c.settings().follows_motion();
   }));
   // A new image runs on trial after an update. It confirms itself only when Bluetooth works, the update path for the
   // next fix; otherwise MCUboot reverts it on the next reset.

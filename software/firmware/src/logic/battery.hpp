@@ -23,6 +23,13 @@ struct battery_status {
   charger_state charger;
 };
 
+// At boot the cell must be above the cutoff by some margin (or the charger must run), or the device powers off again at
+// once: a rested cell recovers above the cutoff and would otherwise run the fan for a few samples on every button press.
+constexpr int start_millivolts = 3400;
+[[nodiscard]] constexpr auto battery_allows_start(battery_status status) noexcept -> bool {
+  return status.charger == charger_state::charging || status.millivolts >= start_millivolts;
+}
+
 // Decides when the battery is too low to keep running. A few low samples in a row are needed, so a voltage dip under
 // fan inrush does not switch the device off.
 class battery_guard {

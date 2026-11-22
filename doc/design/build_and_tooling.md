@@ -31,7 +31,7 @@ Images land in `build/` (the application under `build/firmware/`, MCUboot under 
 
 ## Tests
 
-Ztest suites in `software/firmware/tests/logic` (`accel`, `battery`, `buttons`, `controller`; 23 cases) cover `src/logic`; the test
+Ztest suites in `software/firmware/tests/logic` (`accel`, `battery`, `buttons`, `controller`) cover `src/logic`; the test
 `CMakeLists.txt` compiles that directory directly. They run on the host with twister:
 
 ```sh
@@ -67,9 +67,16 @@ by `smpmgr image state-read`.
 
 ## Release signing key
 
-MCUboot currently uses the public development key (`root-rsa-2048`) for CI and development builds. Release builds must pass
-a private key with `-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=/path/to/key.pem` (the key stays outside the repository). Boards
-already flashed with the development-key MCUboot need an SWD flash of the new MCUboot once.
+MCUboot uses the public development key (`root-rsa-2048`) for CI and development builds; anyone can sign an image for it. Release
+builds select a private key the standard sysbuild way (the key stays outside the repository):
+
+```sh
+west build -b gtfog GTFOg/software/firmware -p -- -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=/path/outside/repo/key.pem
+```
+
+The bootloader carries the public half of the key, so every board needs the new MCUboot flashed over SWD once (`west flash`);
+after that, updates over Bluetooth must be signed with the same key. Pairing is Just Works in the first 3 minutes after a wake, so
+the key is the only protection of the update path: keep it private.
 
 ## Formatting
 

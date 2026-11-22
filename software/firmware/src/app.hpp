@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -24,6 +25,8 @@ template <typename F> decltype(auto) with_controller(F &&f) {
 // Blocks until both buttons are released, then arms them to wake the device from System OFF.
 void buttons_arm_wake();
 
+// Loads the settings of the "gtfog" subtree from flash into the controller; independent of Bluetooth.
+void app_settings_load();
 [[nodiscard]] auto ble_init() -> int;
 [[nodiscard]] auto ble_connected() -> bool;
 void ble_state_changed(); // Notifies the fan speed and strobe state to a connected phone.
@@ -32,7 +35,11 @@ void ble_charger_changed(gtfog::charger_state state);
 [[nodiscard]] auto ble_accel_samples_per_packet() -> std::size_t; // 0 when nobody is connected.
 void ble_accel_send(std::span<std::uint8_t const> packet);
 
-void ble_settings_changed(gtfog::device_settings const &settings); // Stores them in flash and notifies the phone; does not block.
+void ble_settings_changed(gtfog::device_settings const &settings); // Notifies the phone and stores them in flash after 2 s; does not block.
+void ble_settings_flush();                                         // Stores them now, in the calling thread (before System OFF).
+
+// One synchronous battery sample (boot check); empty when the ADC does not work.
+[[nodiscard]] auto battery_sample() -> std::optional<gtfog::battery_status>;
 
 void accelerometer_stream(bool on);
 void accelerometer_motion_mode(bool on); // Powers the sensor for motion detection while on.
