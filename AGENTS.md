@@ -10,8 +10,9 @@ user-facing model.
 | --- | --- |
 | `hardware/` | Altium Designer project Rev 1.0 (`*.SchDoc`, `PCB.PcbDoc`, harnesses, BoM, Gerbers, 3D model); binary, not readable as text |
 | `software/boards/arm/gtfog/` | Board definition: `gtfog.dts`, `gtfog-pinctrl.dtsi` (source of truth for pins), `gtfog_defconfig`, `board.yml` |
-| `software/firmware/src/logic/` | Pure C++ logic without Zephyr: gestures, battery, controller; `CMakeLists.txt` lists the files by hand |
-| `software/firmware/src/` | Board layer, one `.cpp` per module (`board`, `buttons`, `battery`, `ble`, `usb`, `accelerometer`, `main`), `app.hpp`; `CMakeLists.txt` lists them by hand |
+| `software/firmware/src/logic/` | Pure C++ logic without Zephyr: gestures, battery, accelerometer packing, controller; `CMakeLists.txt` lists the files by hand |
+| `software/firmware/src/` | Board layer, one `.cpp` per module (`board`, `buttons`, `battery`, `ble`, `accelerometer`, `main`), `app.hpp`; `CMakeLists.txt` lists them by hand |
+| `software/android/` | Android app; see [doc/android.md](doc/android.md) |
 | `software/firmware/tests/logic/` | Ztest suites of `src/logic`, run on `native_sim` |
 | `software/firmware/prj.conf`, `sysbuild.conf`, `sysbuild/mcuboot.conf` | Kconfig of the app, of sysbuild and of MCUboot |
 | `west.yml`, `zephyr/module.yml` | West manifest (NCS v3.4.0) and the module file that sets `board_root` |
@@ -50,5 +51,6 @@ From an NCS install, run twister with the path to `software/firmware/tests`.
 | [doc/design/principles.md](doc/design/principles.md) | Adding or changing a module, thread or controller behavior. |
 | [doc/design/code_style.md](doc/design/code_style.md) | Writing or reviewing code. |
 | [doc/design/build_and_tooling.md](doc/design/build_and_tooling.md) | Touching the build, Kconfig, MCUboot, tests, CI or formatting. |
-| [doc/firmware.md](doc/firmware.md) | Changing or explaining behavior: buttons, fan, strobe, LED, battery, BLE, DFU. |
+| [doc/firmware.md](doc/firmware.md) | Changing or explaining behavior: buttons, fan, strobe, LED, battery, BLE, update. |
+| [doc/android.md](doc/android.md) | Touching the Android app in `software/android/`. |
 | [doc/hardware.md](doc/hardware.md) | Touching the board definition, pins or the Altium files. |

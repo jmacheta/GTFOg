@@ -1,0 +1,16 @@
+/* Replaces MCUboot's own app.overlay, so it repeats its code partition. */
+/ {
+	aliases {
+		mcuboot-button0 = &button_plus;
+	};
+	chosen {
+		zephyr,code-partition = &boot_partition;
+		zephyr,uart-mcumgr = &cdc_acm_uart0;
+	};
+};
+
+&usbd {
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};

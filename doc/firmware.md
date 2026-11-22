@@ -12,6 +12,7 @@ Pure logic, no Zephyr includes (`src/logic/`, tested on the host):
 | --- | --- |
 | `buttons.hpp/.cpp` | `button_gestures`: turns sampled button levels and time into `button_event`s; `button_timing` holds the thresholds |
 | `battery.hpp/.cpp` | `decode_charger_state`, `battery_percentage` (Li-ion curve), `battery_guard` (low-battery cutoff) |
+| `accel.hpp/.cpp` | `pack_accel`: accelerometer stream packet; `counts_to_milli_g`, `accel_samples_per_packet` |
 | `controller.hpp/.cpp` | `controller`: fan speed, strobe, signals, power off; abstract `outputs`; `fan_duty_permille` |
 
 Board layer (`src/`):
@@ -22,37 +23,49 @@ Board layer (`src/`):
 | `board.cpp` | `board_outputs` (implements `outputs`): PWM fan, PWM strobe and RGB LED patterns (`k_work`), System OFF; owns the `controller` |
 | `buttons.cpp` | Button GPIO interrupts, `buttons` thread feeding `button_gestures`, wake-up arming |
 | `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s |
-| `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service |
-| `usb.cpp` | USB device with the DFU class; writes a new image to slot 1 |
-| `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 and logs samples |
-| `main.cpp` | `main()`: `power_on`, `usb_init`, `ble_init`; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
+| `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service (the mcumgr SMP service comes from NCS) |
+| `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 and streams samples while a phone subscribes |
+| `main.cpp` | `main()`: `power_on`, `ble_init`, confirms the running image once Bluetooth is up; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
 
 ## Threads
 
 | Thread | Priority | Stack | Job |
 | --- | --- | --- | --- |
-| `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Powers the controller on, starts USB and BLE, returns |
+| `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Powers the controller on, starts BLE, confirms the image, returns |
 | `buttons` | 5 | 1024 B | Waits for a pin change; polls every 20 ms while a button is down |
 | `battery` | 7 | 1024 B | Starts after 500 ms; samples every 10 s |
-| `accelerometer` | 10 | 1024 B | Starts after 100 ms; samples once per second |
+| `accelerometer` | 10 | 1536 B | Starts after 100 ms; powers the sensor, then reads the FIFO every 100 ms while streaming |
 
-The strobe, the LED patterns, BLE notifications, advertising restart and the USB reboot run on the system workqueue
+The strobe, the LED patterns, BLE notifications, advertising restart run on the system workqueue
 (2048 B stack). Every thread reaches the controller through `with_controller`.
 
 ## Controller
 
-`controller` (`src/logic/controller.cpp`) holds the fan speed (0..100 %), the strobe state and the battery percentage,
-and drives an `outputs` object.
+`controller` (`src/logic/controller.cpp`) holds the fan speed (0..100 %), the strobe state, the battery percentage and
+the `device_settings`, and drives an `outputs` object. Signals go to `outputs::show()` only when stealth mode is off.
 
 | Input | Effect |
 | --- | --- |
 | `power_on()` | Signal `power_on`, fan 0, strobe off |
+| Any button while `transport_lock` is on | Signal `locked`, nothing else; only `power_off` still works |
 | Button `plus` / `minus` | Fan speed `+steps` / `-steps`, clamped to 0..100; signal `speed_up`, `speed_down`, or `speed_limit` when the result reaches 0 or 100 |
 | Button `toggle_strobe` | Strobe on or off |
-| Button `power_off` | Strobe off, fan 0, `outputs::power_off()` |
+| Button `power_off` | Strobe off, fan 0, signal `power_off`, `outputs::power_off()` |
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
-| `battery_status` | Stores the percentage; when `battery_guard` fires: signal `low_battery`, then the same as `power_off` |
+| `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off |
+| `elapsed(seconds, phone_connected)` (every 10 s) | Counts idle time: fan 0, strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off` |
+| `configure(settings)` (BLE, flash) | Stores the settings |
+
+### Settings
+
+`device_settings`, written over BLE and kept in flash under the settings key `gtfog/cfg` (loaded before `power_on()`, so
+stealth mode also hides the power-on signal). Two bytes (`encode`, `decode_settings`):
+
+| Byte | Contents |
+| --- | --- |
+| 0 | Flags: bit 0 stealth (the status LED never lights up), bit 1 transport lock (buttons only wake and power off); other bits must be 0 |
+| 1 | Auto-off in minutes, 0 = never |
 
 ## Buttons
 
@@ -94,77 +107,111 @@ and blinks; a new signal replaces the running one.
 | `speed_down` | Yellow | 1 | 25 ms |
 | `speed_limit` | Magenta | 1 | 50 ms |
 | `low_battery` | Red | 3 | 200 ms / 200 ms |
-| Power off | Cyan, steady | | 300 ms, after the buttons are released |
+| `locked` | Red | 1 | 50 ms |
+| `power_off` | Cyan | 1 | 300 ms |
 
 ## Battery and charger
 
 - `battery` thread: ADC channel `vbat` (AIN4, P0.28, gain 1/6, 12 bit) times `vbat_divider` (2, a 47k/47k divider on
   the POWER sheet), and the charger STAT1 (P0.03) and STAT2 (P0.02) levels, every 10 s.
-- Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)`: both high charge completed, STAT1 only charging,
-  STAT2 only fault, both low not charging.
+- Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)` per the datasheet status table: both high is not
+  charging (charge done, sleep or no input power), STAT1 high and STAT2 low is charging, STAT1 low is a fault (with STAT2
+  high recoverable: input overvoltage, TS hot or cold, thermal shutdown, system short; both low latched). Board 2 with a
+  battery on USB reads STAT1 low, STAT2 high, a recoverable fault: check the TS network and the STAT wiring.
 - `battery_percentage(mV)`: linear interpolation of a Li-ion curve: 3300 mV 0 %, 3500 5 %, 3600 10 %, 3700 30 %,
-  3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. Reported through the BLE Battery Service.
-- `battery_guard`: 3 consecutive samples below 3300 mV while the charger is neither charging nor completed make the
+  3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. Reported through the BLE Battery Service. The charger state also goes to the charger characteristic.
+- `battery_guard`: 3 consecutive samples below 3300 mV while the charger is not charging make the
   controller show the red low-battery signal and power off. Any other sample resets the count.
 - The `vdd` ADC channel (VDDH / 5) is in the devicetree and not sampled.
 
 ## Bluetooth LE
 
-Peripheral, device name `GTFOg`. Advertising data: flags and the control service UUID; the name is in the scan
+Peripheral, device name `GTFOg`, one connection at a time (`CONFIG_BT_MAX_CONN=1`), ATT MTU 247, data length 251.
+GATT caching is on, so bonded phones get Service Changed and rediscover the database after a firmware update.
+Advertising data: flags and the control service UUID; the name is in the scan
 response. Advertising restarts after a disconnect.
 
 | Service | UUID | Characteristic | Properties |
 | --- | --- | --- | --- |
 | GTFOg control | `a7f00001-5c1e-4b8e-9d2a-6f0e1c3b4d50` | Fan speed `a7f00002-...`: uint8, 0..100 | read, write, notify |
 | | | Strobe `a7f00003-...`: uint8, 0 or 1 | read, write, notify |
+| | | Accelerometer `a7f00004-...`: stream, see below | notify |
+| | | Charger `a7f00005-...`: uint8, 0 not charging, 1 charging, 3 fault (2 is no longer sent) | read, notify |
+| | | Settings `a7f00006-...`: 2 bytes, see [Settings](#settings) | read, write |
+| mcumgr SMP | standard SMP UUID | Firmware update, see [Firmware update](#firmware-update-and-mcuboot) | write, notify |
 | Battery Service | standard | Battery level, updated every 10 s | per Zephyr BAS |
 | Device Information Service | standard | Model number `GTFOg`, manufacturer `elmaczete_customs` | per Zephyr DIS |
 
-The control characteristics and their CCC descriptors need an encrypted link (Just Works pairing); bonds are stored
-in settings (NVS, `storage_partition`). Writes must be one byte; out-of-range values are rejected. Changes made by the
-buttons are notified to a connected phone. The settings store holds only the bonds.
+The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing); bonds are stored
+in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2); out-of-range values are rejected. Changes made by the
+buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
+(`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
 
 ## Accelerometer
 
-The `accelerometer` thread drives the ADXL345 power pin (P1.09) low for 100 ms, then high, waits 500 ms, initializes the
-deferred-init device on I2C0 (address 0x53), sets 100 Hz sampling, and logs X, Y, Z (m/s^2) every second at debug
-level. INT1 (P0.05) and INT2 (P0.04) are in the devicetree and unused.
+The ADXL345 is accessed over raw I2C (no Zephyr sensor driver, `CONFIG_SENSOR` off). The `accelerometer` thread drives the
+power pin (P1.09) low for 100 ms, then high, waits 500 ms, checks the device ID (0xE5) on I2C0 (address 0x53) and sets
+100 Hz, +-16 g full resolution and FIFO stream mode. It then waits for a subscriber on characteristic `a7f00004`. While
+subscribed it reads the FIFO every 100 ms (the 32-sample FIFO holds 320 ms) and sends notifications; when nobody
+subscribes or the link drops it stops, and the FIFO is flushed on the next subscription. INT1 (P0.05) and INT2 (P0.04)
+are in the devicetree and unused.
+
+Notification frame (little endian, `pack_accel`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
+then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accel_samples_per_packet`). A full
+controller buffer drops a packet; a gap in `seq` shows it. Checked ad hoc on a board: about 100 Hz, no gaps; this is not
+in `ble_test.py`. The fan is not controlled by movement.
 
 ## Power off and wake-up
 
-`board_outputs::power_off()` shows cyan, waits until both buttons are released (at most 10 s), arms both as
-level-active wake sources, waits 300 ms, turns the LED off and calls `sys_poweroff()` (System OFF). A press wakes the
+`board_outputs::power_off()` lets the last signal (`power_off` or `low_battery`) finish (at most 2 s), turns the LED off,
+waits until both buttons are released (at most 10 s), arms both as level-active wake sources and calls `sys_poweroff()`
+(System OFF). A press wakes the
 chip through a reset.
 
-## USB DFU and MCUboot
+## Firmware update and MCUboot
 
-- Flash map (`gtfog.dts`): see [hardware.md](hardware.md#flash-map). MCUboot is upgrade only with downgrade
-  prevention.
-- USB device_next. The run-time device (VID:PID `1209:EACC`, manufacturer `elmaczete_customs`, product `GTFOg`) has the
-  DFU run-time class `dfu_runtime`. A detach request makes the firmware shut that device down and enumerate again as
-  `1209:EACD` with the DFU class, whose alternate setting is `slot1_image` (flash slot 1).
-- After a completed download the firmware calls `boot_request_upgrade(BOOT_UPGRADE_PERMANENT)` and reboots 1 s later;
-  MCUboot installs the image.
-- Update: `dfu-util -d 1209:eacc,1209:eacd -a slot1_image -D build/firmware/zephyr/zephyr.signed.bin`.
-- The device is enabled on VBUS ready and disabled on VBUS removal.
-- The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older image, so bump it for
-  every release.
+USB in the application is gone; on the board USB is for charging, except for the MCUboot recovery below.
+
+- Flash map (`gtfog.dts`): see [hardware.md](hardware.md#flash-map). MCUboot mode is sysbuild
+  `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with revert, no scratch partition) with downgrade prevention.
+- Update over Bluetooth: mcumgr SMP (`CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU`) into slot 1. The link must be encrypted
+  (`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT`), so pair first.
+- Update with `smpmgr` (`pip install smpmgr`), verified on hardware; a 210 KB image uploads in about 16 s:
+
+```sh
+smpmgr --ble <address> image upload build/firmware/zephyr/zephyr.signed.bin
+smpmgr --ble <address> image state-write <hash of slot 1>   # marks the image for test
+smpmgr --ble <address> os reset
+```
+
+  `smpmgr upgrade` uploads and resets but does not mark the image, so it does not install it.
+- Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`) only after
+  Bluetooth initialized; an unconfirmed image is reverted by MCUboot on the next reset (verified on hardware both ways).
+- The image version comes from `software/firmware/VERSION` (0.2.0). Downgrade prevention rejects an older or equal
+  image, so raise it for every update.
+- Recovery: MCUboot has serial recovery over USB CDC ACM (mcumgr protocol, VID:PID `1209:EACD`, manufacturer
+  `elmaczete_customs`, product `GTFOg bootloader`). Hold the plus button while the device wakes or resets (devicetree
+  alias `mcuboot-button0` = `button_plus` in `sysbuild/mcuboot.overlay`), then
+  `smpmgr --port /dev/ttyACMx image upload ...`. MCUboot builds this on the legacy USB device stack (as it does for
+  CDC ACM recovery on nRF52); only the bootloader has USB. Not tested on hardware yet.
 - MCUboot status hooks (`software/firmware/mcuboot_hooks/`, linked into the MCUboot image by `sysbuild.cmake`): at
   startup MCUboot turns the fan, the RGB LED and the strobe off; while it installs an update the red strobe blinks at
-  5 Hz (hardware PWM, 200 ms period) and stops before the application starts. Boards that only get USB updates keep
-  the MCUboot they shipped with; a new MCUboot needs SWD.
-- Linux access without root: `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="eac[cd]", MODE="0666"` in
-  `/etc/udev/rules.d/70-gtfog.rules`.
+  5 Hz (hardware PWM, 200 ms period) and stops before the application starts.
+- Boards with an MCUboot built for the old flash map need the new MCUboot over SWD once.
+- Images are signed with the public MCUboot development key (`root-rsa-2048`): anyone can sign an image the bootloader
+  accepts.
 
 ## Logging
 
-`CONFIG_LOG` with the RTT backend, deferred mode. Application modules log at INF (`LOG_MODULE_REGISTER` per file), the
-rest at warning. Read it with a J-Link RTT client or `nrfutil`. The MCUboot log level is warning.
+Off in the application (`CONFIG_LOG=n`, no boot banner); `LOG_*` calls stay in the code. To debug, set `CONFIG_LOG` and
+`CONFIG_LOG_BACKEND_RTT` (plus `CONFIG_USE_SEGGER_RTT`) and read it with a J-Link RTT client or `nrfutil`. MCUboot has
+logging off.
 
 ## Open questions
 
-- Accelerometer-driven fan control is not designed.
-- The charger STAT table and the VBAT divider need checking on a board.
+- Motion-based fan control is not designed.
+- The VBAT divider needs checking on a board, and board 2 reports a charger fault on USB (see [Battery and charger](#battery-and-charger)).
+- MCUboot USB serial recovery is not tested on hardware.
 - BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
   host receives it, so its RF path or 32 MHz crystal is suspect.
-- Flash headroom is about 2 KB (see [hardware.md](hardware.md#flash-map)).
+- The MCUboot signing key is the public development key; a private key is needed before devices are given out.

@@ -6,17 +6,12 @@
 namespace gtfog {
 
 auto decode_charger_state(bool stat1, bool stat2) noexcept -> charger_state {
-  // ponytail: the table the firmware used so far; verify against the BQ25185 datasheet on a board.
-  if(stat1 && stat2) {
-    return charger_state::charge_completed;
-  }
-  if(stat1) {
-    return charger_state::charging;
-  }
-  if(stat2) {
+  // BQ25185 datasheet, status pin table: high/high is done, sleeping or no input; high/low is charging; low/x is a
+  // recoverable (low/high) or latched (low/low) fault.
+  if(!stat1) {
     return charger_state::fault;
   }
-  return charger_state::not_charging;
+  return stat2 ? charger_state::not_charging : charger_state::charging;
 }
 
 auto battery_percentage(int millivolts) noexcept -> std::uint8_t {
@@ -46,7 +41,7 @@ auto battery_percentage(int millivolts) noexcept -> std::uint8_t {
 }
 
 auto battery_guard::update(battery_status status) noexcept -> bool {
-  bool on_external_power = status.charger == charger_state::charging || status.charger == charger_state::charge_completed;
+  bool on_external_power = status.charger == charger_state::charging;
   if(on_external_power || status.millivolts >= cutoff_millivolts) {
     low_samples = 0;
     return false;

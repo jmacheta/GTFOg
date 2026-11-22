@@ -9,11 +9,11 @@ board with a Li-ion battery, USB-C and two buttons.
 
 - Efficient blower fan
 - Internal battery with up to 2000 mAh capacity
-- USB-C charging and Firmware Update (USB DFU through MCUboot, `dfu-util`)
-- Integrated Accelerometer (ADXL345) for dynamic fan speed control (the sensor is only logged, the fan is not driven by it yet)
+- USB-C charging; firmware update over Bluetooth (mcumgr SMP, MCUboot swap with revert), USB serial recovery in the bootloader
+- Integrated Accelerometer (ADXL345) for dynamic fan speed control (streamed over Bluetooth, the fan is not driven by it yet)
 - Built-in Red Strobe light (in case you forgot to bring one with you ;))
 - RGB status LED and two buttons (plus, minus) for manual fan control
-- Bluetooth Low Energy: fan speed and strobe control, battery level (Android app WIP)
+- Bluetooth Low Energy: fan speed and strobe control, battery level, charger state, accelerometer stream, firmware update (Android app WIP)
 - **Every component is open and available for modification (see appropriate LICENSE file)**
 
 ## Build and flash
@@ -35,8 +35,9 @@ With an existing NCS v3.4.0 install, from an NCS v3.4.0 toolchain environment (`
 west build -b gtfog software/firmware -- -DBOARD_ROOT=$PWD/software
 ```
 
-Flash over SWD with `west flash` (J-Link or nrfutil). Later updates go over USB with `dfu-util`; see
-[doc/firmware.md](doc/firmware.md#usb-dfu-and-mcuboot).
+Flash over SWD with `west flash` (J-Link or nrfutil). Later updates go over Bluetooth; see
+[doc/firmware.md](doc/firmware.md#firmware-update-and-mcuboot). A board with an older MCUboot needs SWD once (the flash map
+changed).
 
 Host tests of the hardware-independent logic:
 
@@ -48,7 +49,8 @@ west twister --testsuite-root GTFOg/software/firmware/tests --platform native_si
 
 | File | Contents |
 | --- | --- |
-| [doc/firmware.md](doc/firmware.md) | Firmware behavior: buttons, fan, strobe, LED, battery, BLE, DFU |
+| [doc/firmware.md](doc/firmware.md) | Firmware behavior: buttons, fan, strobe, LED, battery, BLE, update |
+| [doc/android.md](doc/android.md) | Android app (`software/android/`) |
 | [doc/hardware.md](doc/hardware.md) | Board summary, pin table, design files |
 | [doc/design/](doc/design) | Firmware design principles, code style, build and tooling |
 

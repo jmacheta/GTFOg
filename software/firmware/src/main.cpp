@@ -1,19 +1,23 @@
 #include "app.hpp"
 
 #include <hal/nrf_power.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 int main() {
-  with_controller([](gtfog::controller &c) { c.power_on(); });
-
-  if(int err = usb_init(); err != 0) {
-    LOG_ERR("USB: %d", err);
+  // Bluetooth first: it loads the settings, and stealth mode decides whether power_on() lights the LED.
+  int ble_err = ble_init();
+  if(ble_err != 0) {
+    LOG_ERR("Bluetooth: %d", ble_err);
   }
-  if(int err = ble_init(); err != 0) {
-    LOG_ERR("Bluetooth: %d", err);
+  with_controller([](gtfog::controller &c) { c.power_on(); });
+  // A new image runs on trial after an update. It confirms itself only when Bluetooth works, the update path for the
+  // next fix; otherwise MCUboot reverts it on the next reset.
+  if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
+    LOG_ERR("cannot confirm the image");
   }
   LOG_INF("started");
   return 0;

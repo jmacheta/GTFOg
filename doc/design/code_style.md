@@ -38,5 +38,6 @@ Applies to `software/firmware/src` and `tests`.
   `ADC_DT_SPEC_GET_BY_NAME`), never from port and pin numbers in code.
 - Threads are `K_THREAD_DEFINE`; timed work is `K_WORK_DELAYABLE_DEFINE`; init hooks are `SYS_INIT`.
 - Shared state is touched only through `with_controller` or under a Zephyr mutex or semaphore.
-- Logging: `LOG_MODULE_REGISTER(name, LOG_LEVEL_INF)` once per board file; `printk` is not used. `src/logic` does not
+- Logging: `LOG_MODULE_REGISTER(name, LOG_LEVEL_INF)` once per board file (the application builds with `CONFIG_LOG=n`,
+  the calls stay); `printk` is not used. `src/logic` does not
   log.
