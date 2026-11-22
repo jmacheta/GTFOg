@@ -12,7 +12,7 @@ object Uuids {
     val ACCEL: UUID = UUID.fromString("a7f00004-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val CHARGER: UUID = UUID.fromString("a7f00005-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val SETTINGS: UUID = UUID.fromString("a7f00006-5c1e-4b8e-9d2a-6f0e1c3b4d50")
-    /** Speed the fan actually runs at: the target, or the idle speed while standing still in motion mode (firmware 0.3+). */
+    /** Speed the fan runs at and the activity level (firmware 0.3+; the level only from 0.3.2). */
     val FAN_ACTUAL: UUID = UUID.fromString("a7f00007-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val BATTERY: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
     val MODEL: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
@@ -52,8 +52,8 @@ fun chargerText(raw: Int): String = when (raw) {
 
 /**
  * Settings stored on the device. Bytes: 0 flags (bit 0 stealth, bit 1 transport lock), 1 auto shutdown in minutes (0 = never),
- * 2 fan step per click in % (1..25), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255), 5 motion idle fan in % (0..100).
- * Old firmware has bytes 0..1 only: [extended] is false and bytes 2..5 are defaults.
+ * 2 fan step per click in % (1..25), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255), 5..7 fan in % (0..100)
+ * while still, walking, running. [size] is the length the device uses: 2 (bytes 0..1 only), 6 (byte 5 is the still speed) or 8.
  */
 data class DeviceSettings(
     val stealth: Boolean,
@@ -62,25 +62,40 @@ data class DeviceSettings(
     val fanStep: Int = 5,
     val motion: Boolean = false,
     val motionDelayS: Int = 60,
-    val idleFan: Int = 20,
-    val extended: Boolean = true,
+    val motionSpeeds: List<Int> = listOf(20, 50, 100),
+    val size: Int = 8,
 ) {
-    /** Always the length the device uses: 2 bytes for old firmware, 6 for new. */
+    val extended get() = size >= 6
+    val perActivity get() = size >= 8
+
+    /** Always the length the device uses: 2, 6 or 8 bytes. */
     fun encode(): ByteArray {
         val head = byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0)).toByte(), autoOffMin.coerceIn(0, 255).toByte())
         if (!extended) return head
+        val speeds = motionSpeeds.take(if (perActivity) 3 else 1).map { it.coerceIn(0, 100).toByte() }
         return head + byteArrayOf(
-            fanStep.coerceIn(1, 25).toByte(), (if (motion) 1 else 0).toByte(),
-            motionDelayS.coerceIn(5, 255).toByte(), idleFan.coerceIn(0, 100).toByte(),
-        )
+            fanStep.coerceIn(1, 25).toByte(), (if (motion) 1 else 0).toByte(), motionDelayS.coerceIn(5, 255).toByte(),
+        ) + speeds.toByteArray()
     }
 }
 
 fun parseSettings(b: ByteArray): DeviceSettings? {
-    if (b.size != 2 && b.size != 6) return null
-    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), extended = b.size == 6)
-    return if (b.size == 2) base else base.copy(fanStep = u8(b, 2), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4), idleFan = u8(b, 5))
+    if (b.size != 2 && b.size != 6 && b.size != 8) return null
+    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = b.size)
+    if (b.size == 2) return base
+    val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < b.size) u8(b, 5 + i) else default }
+    return base.copy(fanStep = u8(b, 2), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4), motionSpeeds = speeds)
 }
+
+/** Fan speed in % and activity level (0 still, 1 walking, 2 running; null in manual mode or from old firmware). */
+data class FanActual(val percent: Int, val level: Int?)
+
+fun parseFanActual(b: ByteArray): FanActual? {
+    if (b.isEmpty() || b.size > 2) return null
+    return FanActual(u8(b, 0), if (b.size == 2 && u8(b, 1) in 0..2) u8(b, 1) else null)
+}
+
+val ACTIVITY_NAMES = listOf("Still", "Walking", "Running")
 
 /** Last two address bytes tell two goggles apart: "GTFOg · B3:0B". */
 fun deviceLabel(name: String, address: String) = "$name \u00b7 ${address.takeLast(5)}"

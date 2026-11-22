@@ -19,7 +19,7 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 - **Pure logic apart from the board.** `src/logic/` has no Zephyr includes and is built twice: into the firmware and
   into the host tests. It holds the button gesture detector (`button_gestures`), the battery functions
   (`decode_charger_state`, `battery_percentage`, `battery_guard`), the accelerometer packet (`pack_accel`) and
-  `motion_detector`, and the `controller` with `fan_duty_permille` and `pwm_pulse_ns`.
+  `activity_classifier`, and the `controller` with `fan_duty_permille` and `pwm_pulse_ns`.
 - **Behavior goes into `src/logic` and gets a test; board files stay thin.** The board layer in `src/` only reads
   hardware, passes values to the logic and carries out its outputs.
 - **One controller behind a mutex.** Inputs (buttons, BLE writes, battery samples) call `controller` methods through

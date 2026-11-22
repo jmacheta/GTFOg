@@ -81,7 +81,7 @@ auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint
 auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
   auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len});
   if(offset != 0 || !settings) {
-    bool length_ok = len == gtfog::settings_size || len == gtfog::settings_size_v1;
+    bool length_ok = len == gtfog::settings_size || len == gtfog::settings_size_v2 || len == gtfog::settings_size_v1;
     return BT_GATT_ERR(length_ok ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
   with_controller([&](gtfog::controller &c) { c.update_settings(*settings); }); // Calls ble_settings_changed().
@@ -90,7 +90,7 @@ auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint1
 
 auto load_settings(char const *key, std::size_t len, settings_read_cb read, void *arg) -> int {
   std::array<std::uint8_t, gtfog::settings_size> bytes{};
-  bool known_size = len == gtfog::settings_size || len == gtfog::settings_size_v1;
+  bool known_size = len == gtfog::settings_size || len == gtfog::settings_size_v2 || len == gtfog::settings_size_v1;
   if(std::strcmp(key, "cfg") != 0 || !known_size || read(arg, bytes.data(), len) != static_cast<ssize_t>(len)) {
     return 0; // Unknown or damaged entries keep the defaults.
   }
@@ -101,7 +101,8 @@ auto load_settings(char const *key, std::size_t len, settings_read_cb read, void
 }
 
 auto read_effective_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
-  auto value = with_controller([](gtfog::controller &c) { return static_cast<std::uint8_t>(c.effective_fan_speed()); });
+  auto value =
+      with_controller([](gtfog::controller &c) { return std::array<std::uint8_t, 2>{static_cast<std::uint8_t>(c.fan_speed()), c.activity_code()}; });
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
@@ -161,11 +162,12 @@ void start_advertising(k_work *) {
 K_WORK_DEFINE(advertising_work, start_advertising);
 
 void notify_state(k_work *) {
-  auto [fan, effective, strobe] = with_controller(
-      [](gtfog::controller &c) { return std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>(c.fan_speed(), c.effective_fan_speed(), c.strobe()); });
+  auto [fan, activity, strobe] = with_controller(
+      [](gtfog::controller &c) { return std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>(c.fan_speed(), c.activity_code(), c.strobe()); });
+  std::array<std::uint8_t, 2> const actual{fan, activity};
   // -ENOTCONN and friends only mean nobody listens.
   std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[fan_value], &fan, sizeof(fan));
-  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[effective_fan_value], &effective, sizeof(effective));
+  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[effective_fan_value], actual.data(), actual.size());
   std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[strobe_value], &strobe, sizeof(strobe));
 }
 K_WORK_DEFINE(notify_work, notify_state);

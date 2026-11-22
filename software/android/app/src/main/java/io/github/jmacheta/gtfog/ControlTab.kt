@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
 private val DELAYS = listOf("15 s" to 15, "30 s" to 30, "1 min" to 60, "2 min" to 120, "4 min" to 240)
-private val IDLE_SPEEDS = listOf("Stop" to 0, "10 %" to 10, "20 %" to 20, "30 %" to 30, "50 %" to 50)
+private val LEVEL_SPEEDS = listOf("Stop" to 0) + (1..10).map { "${it * 10} %" to it * 10 }
 
 @Composable
 fun ControlTab(s: Session, st: DeviceState) {
@@ -87,12 +87,20 @@ private fun ModeCard(s: Session, st: DeviceState) {
             } else if (cur.motion) {
                 Text("Slow down after", style = MaterialTheme.typography.titleMedium)
                 ChoiceChips(DELAYS, cur.motionDelayS) { v -> s.client.updateSettings { it.copy(motionDelayS = v) } }
-                Text("Idle speed", style = MaterialTheme.typography.titleMedium)
-                ChoiceChips(IDLE_SPEEDS, cur.idleFan) { v -> s.client.updateSettings { it.copy(idleFan = v) } }
-                Text(
-                    "The fan drops to the idle speed when you stand still and comes back when you move.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                if (cur.perActivity) {
+                    ACTIVITY_NAMES.forEachIndexed { level, name ->
+                        Text(name, style = MaterialTheme.typography.titleMedium)
+                        ChoiceChips(LEVEL_SPEEDS, cur.motionSpeeds[level]) { v ->
+                            s.client.updateSettings { it.copy(motionSpeeds = it.motionSpeeds.toMutableList().also { l -> l[level] = v }) }
+                        }
+                    }
+                    Text(
+                        "The fan follows how much you move. The - and + buttons change the speed of the current activity.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Text("Update the firmware to set a speed for each activity.", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -165,7 +173,7 @@ private fun BatteryWidget(level: Int?, charger: Int?) {
 private fun FanCard(s: Session, st: DeviceState) {
     var drag by remember { mutableStateOf<Float?>(null) }
     val target = st.fan ?: 0
-    // While standing still in motion mode the fan runs slower than the target: show what it really does.
+    // The big number is what the fan runs at; in motion mode the target is the one of the current activity.
     val actual = st.fanActual ?: target
     val shown = drag ?: actual.toFloat()
     val enabled = st.fan != null
@@ -175,11 +183,12 @@ private fun FanCard(s: Session, st: DeviceState) {
         Column(Modifier.padding(16.dp)) {
             Text("Fan", style = MaterialTheme.typography.titleLarge)
             Text("${shown.roundToInt()} %", Modifier.fillMaxWidth(), style = MaterialTheme.typography.displayLarge, textAlign = TextAlign.Center)
+            val level = if (st.settings?.motion == true) st.activity else null
+            if (level != null) {
+                Text("Activity: ${ACTIVITY_NAMES[level]}", Modifier.fillMaxWidth(), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            }
             if (drag == null && actual != target) {
-                Text(
-                    "Target $target % · slowed down while you stand still",
-                    Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
-                )
+                Text("Target $target %", Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton({ s.client.stepFan(-1) }, button, enabled = enabled) { Text("−$step %", style = MaterialTheme.typography.titleLarge) }

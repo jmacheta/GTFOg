@@ -27,20 +27,24 @@ auto pack_accel(std::uint16_t seq, std::uint8_t rate_hz, std::span<accel_sample 
   return static_cast<std::size_t>(at - out.data());
 }
 
-auto motion_detector::update(std::span<accel_sample const> samples) noexcept -> bool {
-  constexpr float baseline_weight = 1.0F / 128;
-  bool moving = false;
+auto activity_classifier::update(std::span<accel_sample const> samples) noexcept -> std::optional<activity_level> {
+  std::optional<activity_level> level;
   for(auto const &s : samples) {
     float x = counts_to_milli_g(s.x), y = counts_to_milli_g(s.y), z = counts_to_milli_g(s.z);
     float magnitude = std::sqrt(x * x + y * y + z * z);
-    if(!primed) {
-      baseline_milli_g = magnitude;
-      primed = true;
+    float delta = magnitude - mean;
+    mean += delta / static_cast<float>(++count);
+    m2 += delta * (magnitude - mean);
+    if(count == window_samples) {
+      float deviation = std::sqrt(m2 / window_samples);
+      level = deviation < walk_threshold_milli_g  ? activity_level::still
+              : deviation < run_threshold_milli_g ? activity_level::walking
+                                                  : activity_level::running;
+      count = 0;
+      mean = m2 = 0;
     }
-    moving = moving || std::fabs(magnitude - baseline_milli_g) > threshold_milli_g;
-    baseline_milli_g += (magnitude - baseline_milli_g) * baseline_weight;
   }
-  return moving;
+  return level;
 }
 
 } // namespace gtfog

@@ -3,6 +3,7 @@
 #include <zephyr/ztest.h>
 
 #include <array>
+#include <optional>
 
 using namespace gtfog;
 
@@ -37,39 +38,43 @@ ZTEST(accel, test_pack_layout) {
   zassert_equal(static_cast<std::int16_t>(out[14] | out[15] << 8), -11); // -3 counts = -11.7 mg, truncated.
 }
 
-ZTEST(accel, test_motion_detector_ignores_noise_at_rest) {
-  motion_detector detector;
-  std::array<accel_sample, 32> batch{};
-  for(int round = 0; round != 20; ++round) {
+namespace {
+
+// One second of samples whose magnitude alternates between 1 g and 1 g + `swing` counts: the deviation is half the swing.
+auto classify_second(int swing) -> std::optional<activity_level> {
+  activity_classifier classifier;
+  std::array<accel_sample, 50> batch{};
+  std::optional<activity_level> level;
+  for(int half = 0; half != 2; ++half) {
     for(std::size_t i = 0; i != batch.size(); ++i) {
-      auto noise = static_cast<std::int16_t>((static_cast<int>(i) * 7 + round) % 9 - 4); // +-4 counts, about +-16 mg.
-      batch[i] = {noise, static_cast<std::int16_t>(-noise), static_cast<std::int16_t>(256 + noise)};
+      batch[i] = {0, 0, static_cast<std::int16_t>(256 + (i % 2 == 0 ? 0 : swing))};
     }
-    zassert_false(detector.update(batch));
+    zassert_false(level.has_value(), "a level only after 100 samples");
+    level = classifier.update(batch);
   }
+  return level;
 }
 
-ZTEST(accel, test_motion_detector_sees_movement) {
-  motion_detector detector;
-  std::array<accel_sample, 32> still{};
-  still.fill({0, 0, 256});
-  zassert_false(detector.update(still));
-  std::array<accel_sample, 32> shake = still;
-  shake[10] = {200, 0, 256}; // About 0.27 g more than at rest.
-  zassert_true(detector.update(shake));
-  zassert_false(detector.update(still));
-  shake[10] = {0, 0, 120}; // Free fall towards zero.
-  zassert_true(detector.update(shake));
+} // namespace
+
+ZTEST(accel, test_activity_levels) {
+  zassert_equal(classify_second(0), activity_level::still);
+  zassert_equal(classify_second(8), activity_level::still);     // About 31 mg deviation.
+  zassert_equal(classify_second(60), activity_level::walking);  // About 117 mg.
+  zassert_equal(classify_second(150), activity_level::walking); // About 293 mg.
+  zassert_equal(classify_second(200), activity_level::running); // About 390 mg.
 }
 
-ZTEST(accel, test_motion_detector_follows_slow_drift) {
-  motion_detector detector;
-  accel_sample sample{0, 0, 256};
-  zassert_false(detector.update(std::span{&sample, 1}));
-  bool moved = false;
-  for(int i = 0; i != 2000; ++i) { // The magnitude creeps up by 0.4 g over 2000 samples.
-    sample.z = static_cast<std::int16_t>(256 + i / 20);
-    moved = moved || detector.update(std::span{&sample, 1});
+ZTEST(accel, test_activity_ignores_gravity_and_reports_every_second) {
+  activity_classifier classifier;
+  std::array<accel_sample, 30> tilted{};
+  tilted.fill({256, 0, 0}); // Any constant orientation is still.
+  int reports = 0;
+  for(int i = 0; i != 20; ++i) {
+    if(auto level = classifier.update(tilted)) {
+      zassert_equal(*level, activity_level::still);
+      ++reports;
+    }
   }
-  zassert_false(moved);
+  zassert_equal(reports, 6); // 600 samples.
 }

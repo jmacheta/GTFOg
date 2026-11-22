@@ -35,6 +35,7 @@ data class DeviceState(
     val battery: Int? = null,
     val fan: Int? = null,
     val fanActual: Int? = null,
+    val activity: Int? = null,
     val strobe: Boolean? = null,
     val charger: Int? = null,
     val settings: DeviceSettings? = null,
@@ -166,8 +167,7 @@ class GtfogClient(
 
     fun setFan(percent: Int) {
         val v = percent.coerceIn(0, 100)
-        // In manual mode the fan follows the target at once; in motion mode the device reports what it does.
-        _state.update { it.copy(fan = v, fanActual = if (it.settings?.motion == true) it.fanActual else v) }
+        _state.update { it.copy(fan = v, fanActual = v) }
         write(Uuids.FAN, v)
     }
 
@@ -306,7 +306,7 @@ class GtfogClient(
         _state.update {
             when (u) {
                 Uuids.FAN -> it.copy(fan = b)
-                Uuids.FAN_ACTUAL -> it.copy(fanActual = b)
+                Uuids.FAN_ACTUAL -> parseFanActual(v)?.let { a -> it.copy(fanActual = a.percent, activity = a.level) } ?: it
                 Uuids.STROBE -> it.copy(strobe = b != 0)
                 Uuids.CHARGER -> it.copy(charger = b)
                 Uuids.BATTERY -> it.copy(battery = b)

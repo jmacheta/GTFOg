@@ -9,23 +9,30 @@ auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_siz
           s.auto_off_minutes,
           s.fan_step,
           static_cast<std::uint8_t>(s.mode),
-          s.motion_idle_s,
-          s.idle_speed};
+          s.motion_delay_s,
+          s.motion_speed[0],
+          s.motion_speed[1],
+          s.motion_speed[2]};
 }
 
 auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings> {
-  if((bytes.size() != settings_size && bytes.size() != settings_size_v1) || (bytes[0] & ~3U) != 0) {
+  if((bytes.size() != settings_size && bytes.size() != settings_size_v2 && bytes.size() != settings_size_v1) || (bytes[0] & ~3U) != 0) {
     return std::nullopt;
   }
   device_settings s{.stealth = (bytes[0] & 1U) != 0, .transport_lock = (bytes[0] & 2U) != 0, .auto_off_minutes = bytes[1]};
-  if(bytes.size() == settings_size) {
-    if(bytes[2] < 1 || bytes[2] > 25 || bytes[3] > 1 || bytes[4] < 5 || bytes[5] > 100) {
+  if(bytes.size() != settings_size_v1) {
+    if(bytes[2] < 1 || bytes[2] > 25 || bytes[3] > 1 || bytes[4] < 5) {
       return std::nullopt;
     }
     s.fan_step = bytes[2];
     s.mode = static_cast<fan_mode>(bytes[3]);
-    s.motion_idle_s = bytes[4];
-    s.idle_speed = bytes[5];
+    s.motion_delay_s = bytes[4];
+    for(std::size_t i = 5; i < bytes.size(); ++i) {
+      if(bytes[i] > 100) {
+        return std::nullopt;
+      }
+      s.motion_speed[i - 5] = bytes[i];
+    }
   }
   return s;
 }
@@ -38,7 +45,9 @@ void controller::indicate(signal s) {
 
 void controller::power_on() {
   indicate(signal::power_on);
-  set_fan_speed(0);
+  fan = 0;
+  level = activity_level::still;
+  apply_fan();
   set_strobe(false);
 }
 
@@ -74,36 +83,56 @@ void controller::handle(button_event event) {
 }
 
 void controller::change_fan_speed(int delta) {
-  int wanted = static_cast<int>(fan) + delta;
+  int wanted = static_cast<int>(fan_speed()) + delta;
   set_fan_speed(static_cast<unsigned>(std::clamp(wanted, 0, 100)));
   bool at_limit = wanted <= 0 || wanted >= 100;
   indicate(at_limit ? signal::speed_limit : (delta > 0 ? signal::speed_up : signal::speed_down));
 }
 
 void controller::set_fan_speed(unsigned percent) {
-  fan = std::min(percent, 100u);
-  apply_fan(true); // The target changed: report it even when the fan keeps its idle speed.
-}
-
-void controller::apply_fan(bool force) {
-  bool still = cfg.mode == fan_mode::motion && still_ms >= cfg.motion_idle_s * 1000U;
-  unsigned effective = still ? std::min<unsigned>(fan, cfg.idle_speed) : fan;
-  if(force || applied_fan != effective) {
-    applied_fan = effective;
-    out.set_fan(effective);
+  percent = std::min(percent, 100u);
+  if(cfg.mode == fan_mode::motion) {
+    cfg.motion_speed[static_cast<unsigned>(level)] = static_cast<std::uint8_t>(percent);
+    out.settings_changed(cfg);
+  } else {
+    fan = percent;
   }
+  apply_fan();
 }
 
 void controller::update_settings(device_settings s) {
+  if(s.mode != cfg.mode) {
+    level = activity_level::still;
+    rising_s = falling_s = 0;
+  }
   cfg = s;
-  still_ms = 0;
   apply_fan();
   out.settings_changed(cfg);
 }
 
-void controller::motion(bool moving, unsigned elapsed_ms) {
-  still_ms = moving ? 0 : still_ms + elapsed_ms;
-  apply_fan();
+void controller::observe(activity_level raw) {
+  if(cfg.mode != fan_mode::motion) {
+    return;
+  }
+  auto before = level;
+  if(raw > level) {
+    rising_to = rising_s++ == 0 ? raw : std::min(rising_to, raw);
+    falling_s = 0;
+    if(rising_s >= 2) { // ponytail: 2 s up, cfg.motion_delay_s down; tune with the thresholds.
+      level = rising_to;
+      rising_s = 0;
+    }
+  } else {
+    rising_s = 0;
+    falling_s = raw < level ? falling_s + 1 : 0;
+    if(falling_s >= cfg.motion_delay_s) {
+      level = raw;
+      falling_s = 0;
+    }
+  }
+  if(level != before) {
+    apply_fan(); // Also tells the phone about the new level.
+  }
 }
 
 void controller::set_strobe(bool on) {
@@ -126,7 +155,7 @@ void controller::handle(battery_status status) {
 }
 
 void controller::elapsed(unsigned seconds, bool phone_connected) {
-  if(fan != 0 || strobe_on || phone_connected) {
+  if(fan_speed() != 0 || strobe_on || phone_connected) {
     idle_seconds = 0;
     return;
   }
@@ -138,7 +167,8 @@ void controller::elapsed(unsigned seconds, bool phone_connected) {
 
 void controller::power_off(signal s) {
   set_strobe(false);
-  set_fan_speed(0);
+  fan = 0;
+  out.set_fan(0);
   indicate(s);
   out.power_off();
 }

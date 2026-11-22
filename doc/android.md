@@ -12,7 +12,7 @@ Source files: `ScanScreen.kt`, `DeviceScreen.kt` (top bar, tabs, offline message
 | Screen | Contents |
 | --- | --- |
 | Scan | LE scan filtered by the service UUID; each device as "GTFOg · B3:0B" (last two address bytes), address, RSSI; tap to connect. First-run text (permission, then the system pairing dialog on the first connect). The scan stops after 30 s ("Scan again"); a failed scan shows its error. The last connected device is remembered (SharedPreferences) and connected to automatically when seen, once per app start. A permanently refused permission offers "Open app settings"; Bluetooth off offers "Enable Bluetooth" |
-| Control (tab) | Battery icon drawn on a Canvas (red with "!" on fault, bolt while charging, grey when unknown; spoken as "Battery 82 %, charging"), fan readout with slider and -step/+step buttons (the device's fan step, "-5 %" / "+5 %"), strobe switch, Mode: Manual / Motion. In Motion: "Slow down after" (15 s, 30 s, 1 min, 2 min, 4 min) and "Idle speed" (Stop, 10, 20, 30, 50 %) |
+| Control (tab) | Battery icon drawn on a Canvas (red with "!" on fault, bolt while charging, grey when unknown; spoken as "Battery 82 %, charging"), fan readout with slider and -step/+step buttons (the device's fan step, "-5 %" / "+5 %"), strobe switch, Mode: Manual / Motion. In Motion: "Slow down after" (15 s, 30 s, 1 min, 2 min, 4 min) and a chip row each for "Still", "Walking" and "Running" (Stop, 10 ... 100 %); with a firmware that has no per-activity speeds a note says to update. In Motion the fan readout shows "Activity: Walking" below the number, and "Target N %" only when the speed differs from it. The slider and the -/+ buttons write the fan characteristic as before; the device applies them to the current activity |
 | Settings (tab) | Stealth mode, Transport lock (unlock on the goggles: press + three times quickly), Auto shutdown (Off, 5, 10, 15, 30, 60 min), Fan step per click (1, 2, 5, 10, 20 %), Firmware card (installed version, update), model, manufacturer and the pairing note (new phones can pair only within 3 minutes after switch-on). Shows "Update the firmware to change settings" if the device lacks the settings characteristic; with old firmware (2-byte settings) the fan step and the motion mode are disabled with a note |
 | Debug (tab) | Accelerometer, recording and the list of recordings below |
 | Accelerometer (Debug) | Live switch, scrolling x/y/z chart in g, window 5/10/30 s, Y range auto/±2/±4/±8/±16 g, legend, \|a\|, measured samples/s, lost frames |
@@ -55,17 +55,18 @@ closed", 133 "Could not connect, try again".
 | `a7f00003-...` | Strobe | u8 0/1 | read, write, notify |
 | `a7f00004-...` | Accelerometer | frame, below | notify; the stream runs only while notifications are on |
 | `a7f00005-...` | Charger state | u8: 0 not charging (also charge done), 1 charging, 3 fault; 2 (completed) only from old firmware | read, notify |
-| `a7f00006-...` | Settings | 6 bytes, below; written whole on every change | read, write, notify |
-| `a7f00007-...` | Actual fan speed | uint8; the big number on the Control tab, with "Target N %" below it when it differs | read, notify |
+| `a7f00006-...` | Settings | 8 bytes, below (6 or 2 on older firmware); written whole on every change | read, write, notify |
+| `a7f00007-...` | Fan state | 2 bytes: speed in % (the big number on the Control tab) and activity level (0 still, 1 walking, 2 running, 255 manual); 1 byte on firmware before 0.3.2 | read, notify |
 | `0x2A19` (`0x180F`) | Battery level | u8 % | read, notify |
 | `0x2A24`, `0x2A29` (`0x180A`) | Model, manufacturer | string | read |
 
 All UUIDs end in `-5c1e-4b8e-9d2a-6f0e1c3b4d50`.
 
-Settings (v2): byte 0 flags (bit 0 stealth, bit 1 transport lock), 1 auto shutdown in minutes (0 = never), 2 fan step per
-click in % (1..25, default 5), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255, default 60), 5 motion idle fan in %
-(0..100, default 20). Old firmware has 2 bytes: bytes 2..5 are then defaults, the extra settings are shown as unsupported, and
-writes keep the 2-byte length (6 for new firmware). The device changes settings too (the transport lock is cleared by pressing +
+Settings (v3): byte 0 flags (bit 0 stealth, bit 1 transport lock), 1 auto shutdown in minutes (0 = never), 2 fan step per
+click in % (1..25, default 5), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255, default 60), 5, 6, 7 motion fan
+in % while still, walking, running (0..100, defaults 20, 50, 100). Firmware 0.3.1 has 6 bytes (byte 5 is the still speed; the
+per-activity rows are replaced by a note) and 0.2.0 has 2 bytes (extra settings shown as unsupported); writes keep the length
+the device uses (8 for new firmware). The device changes settings too (the transport lock is cleared by pressing +
 three times quickly) and notifies them; the app subscribes on connect.
 
 Accelerometer frame (little endian): `u16 seq`, `u8 rate_hz` (100), `u8 n` (at most 40), then `n` times `int16 x, y, z` in milli-g
@@ -128,7 +129,7 @@ Jackson annotations (mcumgr maps CBOR onto its model classes by reflection). The
 otherwise `app-release-unsigned.apk` is produced. No keys are in the repository. The launcher icon is adaptive (`mipmap-anydpi-v26`,
 vector fan in a ring, with a monochrome layer).
 
-The testable core is `Protocol.kt` (frame decode, sequence gaps, ring buffer, CSV lines, charger mapping, settings v2, labels and error texts), covered by JVM unit tests
+The testable core is `Protocol.kt` (frame decode, sequence gaps, ring buffer, CSV lines, charger mapping, settings v3 and fan state, labels and error texts), covered by JVM unit tests
 in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the same Gradle command (including `assembleRelease`) and uploads the debug APK as
 `gtfog-android-debug`.
 

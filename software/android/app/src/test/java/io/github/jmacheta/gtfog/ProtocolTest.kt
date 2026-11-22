@@ -106,35 +106,57 @@ class ProtocolTest {
 
     @Test
     fun settingsRoundTrip() {
-        assertArrayEquals(byteArrayOf(3, 30, 5, 0, 60, 20), DeviceSettings(true, true, 30).encode())
-        assertArrayEquals(byteArrayOf(2, 0, 10, 1, 120, 0), DeviceSettings(false, true, 0, 10, true, 120, 0).encode())
+        assertArrayEquals(byteArrayOf(3, 30, 5, 0, 60, 20, 50, 100), DeviceSettings(true, true, 30).encode())
+        assertArrayEquals(byteArrayOf(2, 0, 10, 1, 120, 0, 10, 90), DeviceSettings(false, true, 0, 10, true, 120, listOf(0, 10, 90)).encode())
         assertEquals(
-            DeviceSettings(true, false, 5, 2, true, 15, 50),
-            parseSettings(byteArrayOf(1, 5, 2, 1, 15, 50)),
+            DeviceSettings(true, false, 5, 2, true, 15, listOf(50, 60, 70)),
+            parseSettings(byteArrayOf(1, 5, 2, 1, 15, 50, 60, 70)),
         )
-        assertEquals(DeviceSettings(false, true, 60, 25, false, 255, 100), parseSettings(byteArrayOf(2, 60, 25, 0, -1, 100)))
+        assertEquals(
+            DeviceSettings(false, true, 60, 25, false, 255, listOf(100, 0, 100)),
+            parseSettings(byteArrayOf(2, 60, 25, 0, -1, 100, 0, 100)),
+        )
     }
 
     @Test
     fun oldFirmwareSettings() {
         val s = parseSettings(byteArrayOf(1, 5))!!
-        assertEquals(DeviceSettings(true, false, 5, extended = false), s)
+        assertEquals(DeviceSettings(true, false, 5, size = 2), s)
         assertEquals(5, s.fanStep)
         assertEquals(60, s.motionDelayS)
         // written back with the length the device uses
-        assertArrayEquals(byteArrayOf(2, 60), DeviceSettings(false, true, 60, extended = false).encode())
+        assertArrayEquals(byteArrayOf(2, 60), DeviceSettings(false, true, 60, size = 2).encode())
         assertArrayEquals(byteArrayOf(1, 5), s.encode())
     }
 
     @Test
+    fun firmware031Settings() {
+        val s = parseSettings(byteArrayOf(1, 5, 10, 1, 30, 40))!!
+        assertEquals(DeviceSettings(true, false, 5, 10, true, 30, listOf(40, 50, 100), size = 6), s)
+        assertEquals(false, s.perActivity)
+        assertArrayEquals(byteArrayOf(1, 5, 10, 1, 30, 40), s.encode())
+        assertArrayEquals(byteArrayOf(1, 5, 10, 1, 30, 70), s.copy(motionSpeeds = listOf(70, 50, 100)).encode())
+    }
+
+    @Test
     fun settingsEncodeClamps() {
-        assertArrayEquals(byteArrayOf(0, 0, 1, 0, 5, 0), DeviceSettings(false, false, 0, 0, false, 0, -3).encode())
-        assertArrayEquals(byteArrayOf(0, -1, 25, 1, -1, 100), DeviceSettings(false, false, 999, 99, true, 999, 200).encode())
+        assertArrayEquals(byteArrayOf(0, 0, 1, 0, 5, 0, 0, 0), DeviceSettings(false, false, 0, 0, false, 0, listOf(-3, -1, 0)).encode())
+        assertArrayEquals(byteArrayOf(0, -1, 25, 1, -1, 100, 100, 100), DeviceSettings(false, false, 999, 99, true, 999, listOf(200, 101, 100)).encode())
     }
 
     @Test
     fun settingsRejectWrongSize() {
-        for (n in listOf(0, 1, 3, 4, 5, 7)) assertNull(parseSettings(ByteArray(n)))
+        for (n in listOf(0, 1, 3, 4, 5, 7, 9)) assertNull(parseSettings(ByteArray(n)))
+    }
+
+    @Test
+    fun fanActual() {
+        assertEquals(FanActual(80, 2), parseFanActual(byteArrayOf(80, 2)))
+        assertEquals(FanActual(0, 0), parseFanActual(byteArrayOf(0, 0)))
+        assertEquals(FanActual(50, null), parseFanActual(byteArrayOf(50, -1))) // 255: manual mode
+        assertEquals(FanActual(50, null), parseFanActual(byteArrayOf(50))) // firmware 0.3.0 and 0.3.1
+        assertNull(parseFanActual(ByteArray(0)))
+        assertNull(parseFanActual(ByteArray(3)))
     }
 
     @Test

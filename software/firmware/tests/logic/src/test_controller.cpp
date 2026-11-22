@@ -182,39 +182,53 @@ ZTEST(controller, test_settings_encoding) {
                     .auto_off_minutes = 15,
                     .fan_step = 10,
                     .mode = fan_mode::motion,
-                    .motion_idle_s = 30,
-                    .idle_speed = 40};
+                    .motion_delay_s = 30,
+                    .motion_speed = {40, 60, 80}};
   auto bytes = encode(s);
-  zassert_equal(bytes.size(), 6);
-  std::array<std::uint8_t, 6> const expected{3, 15, 10, 1, 30, 40};
+  zassert_equal(bytes.size(), 8);
+  std::array<std::uint8_t, 8> const expected{3, 15, 10, 1, 30, 40, 60, 80};
   zassert_true(bytes == expected);
   zassert_true(decode_settings(bytes) == s);
   zassert_equal(encode({})[2], 5);
   zassert_equal(encode({})[4], 60);
   zassert_equal(encode({})[5], 20);
+  zassert_equal(encode({})[6], 50);
+  zassert_equal(encode({})[7], 100);
 }
 
-ZTEST(controller, test_settings_decoding_rejects_bad_values) {
-  std::uint8_t const old_format[] = {3, 15};
-  auto old = decode_settings(old_format);
+ZTEST(controller, test_settings_decoding_accepts_older_formats) {
+  std::uint8_t const v1[] = {3, 15};
+  auto old = decode_settings(v1);
   zassert_true(old.has_value());
   zassert_true((*old == device_settings{.stealth = true, .transport_lock = true, .auto_off_minutes = 15}));
   zassert_equal(old->fan_step, 5);
 
+  std::uint8_t const v2[] = {0, 0, 10, 1, 30, 40}; // The single idle speed becomes the still speed.
+  auto v2s = decode_settings(v2);
+  zassert_true(v2s.has_value());
+  zassert_true((*v2s == device_settings{.fan_step = 10, .mode = fan_mode::motion, .motion_delay_s = 30, .motion_speed = {40, 50, 100}}));
+}
+
+ZTEST(controller, test_settings_decoding_rejects_bad_values) {
   std::uint8_t const too_short[] = {1};
   std::uint8_t const three[] = {1, 0, 5};
-  std::uint8_t const unknown_flag[] = {4, 0, 5, 0, 60, 20};
-  std::uint8_t const step_zero[] = {0, 0, 0, 0, 60, 20};
-  std::uint8_t const step_big[] = {0, 0, 26, 0, 60, 20};
-  std::uint8_t const mode_two[] = {0, 0, 5, 2, 60, 20};
-  std::uint8_t const idle_short[] = {0, 0, 5, 1, 4, 20};
-  std::uint8_t const speed_big[] = {0, 0, 5, 1, 60, 101};
-  std::uint8_t const old_with_unknown_flag[] = {4, 0};
-  std::uint8_t const ok_limits[] = {0, 0, 25, 1, 5, 100};
-  for(auto bad :
-      {std::span<std::uint8_t const>{too_short}, std::span<std::uint8_t const>{three}, std::span<std::uint8_t const>{unknown_flag},
-       std::span<std::uint8_t const>{step_zero}, std::span<std::uint8_t const>{step_big}, std::span<std::uint8_t const>{mode_two},
-       std::span<std::uint8_t const>{idle_short}, std::span<std::uint8_t const>{speed_big}, std::span<std::uint8_t const>{old_with_unknown_flag}}) {
+  std::uint8_t const seven[] = {0, 0, 5, 0, 60, 20, 50};
+  std::uint8_t const unknown_flag[] = {4, 0, 5, 0, 60, 20, 50, 100};
+  std::uint8_t const step_zero[] = {0, 0, 0, 0, 60, 20, 50, 100};
+  std::uint8_t const step_big[] = {0, 0, 26, 0, 60, 20, 50, 100};
+  std::uint8_t const mode_two[] = {0, 0, 5, 2, 60, 20, 50, 100};
+  std::uint8_t const delay_short[] = {0, 0, 5, 1, 4, 20, 50, 100};
+  std::uint8_t const still_big[] = {0, 0, 5, 1, 60, 101, 50, 100};
+  std::uint8_t const walking_big[] = {0, 0, 5, 1, 60, 20, 101, 100};
+  std::uint8_t const running_big[] = {0, 0, 5, 1, 60, 20, 50, 101};
+  std::uint8_t const v2_speed_big[] = {0, 0, 5, 1, 60, 101};
+  std::uint8_t const v1_with_unknown_flag[] = {4, 0};
+  std::uint8_t const ok_limits[] = {0, 0, 25, 1, 5, 100, 0, 100};
+  for(auto bad : {std::span<std::uint8_t const>{too_short}, std::span<std::uint8_t const>{three}, std::span<std::uint8_t const>{seven},
+                  std::span<std::uint8_t const>{unknown_flag}, std::span<std::uint8_t const>{step_zero}, std::span<std::uint8_t const>{step_big},
+                  std::span<std::uint8_t const>{mode_two}, std::span<std::uint8_t const>{delay_short}, std::span<std::uint8_t const>{still_big},
+                  std::span<std::uint8_t const>{walking_big}, std::span<std::uint8_t const>{running_big}, std::span<std::uint8_t const>{v2_speed_big},
+                  std::span<std::uint8_t const>{v1_with_unknown_flag}}) {
     zassert_false(decode_settings(bad).has_value());
   }
   zassert_true(decode_settings(ok_limits).has_value());
@@ -273,53 +287,96 @@ ZTEST(controller, test_user_settings_are_stored_and_flash_settings_are_not) {
   zassert_equal(c.settings().auto_off_minutes, 7);
 }
 
-ZTEST(controller, test_motion_mode_slows_the_fan_while_still) {
+namespace {
+
+// One raw level per second for `seconds` seconds.
+void feed(controller &c, activity_level raw, unsigned seconds) {
+  for(unsigned i = 0; i != seconds; ++i) {
+    c.observe(raw);
+  }
+}
+
+} // namespace
+
+ZTEST(controller, test_motion_mode_runs_the_target_of_the_level) {
   fake_outputs out;
   controller c{out};
-  c.update_settings({.mode = fan_mode::motion, .motion_idle_s = 10, .idle_speed = 20});
+  c.update_settings({.mode = fan_mode::motion, .motion_delay_s = 10, .motion_speed = {20, 50, 80}});
   c.power_on();
-  c.set_fan_speed(60);
-  zassert_equal(out.fan, 60);
-  unsigned calls = out.fan_calls;
-  c.motion(false, 5000);
-  zassert_equal(out.fan, 60);
-  zassert_equal(out.fan_calls, calls, "no change, no output call");
-  c.motion(false, 5000);
   zassert_equal(out.fan, 20);
-  zassert_equal(c.fan_speed(), 60, "the target stays");
-  zassert_equal(c.effective_fan_speed(), 20);
-  c.motion(false, 5000);
-  zassert_equal(out.fan_calls, calls + 1);
-  c.motion(true, 100);
-  zassert_equal(out.fan, 60);
-  c.motion(false, 10000);
-  zassert_equal(out.fan, 20);
+  zassert_equal(c.activity_code(), 0);
+  feed(c, activity_level::walking, 1);
+  zassert_equal(out.fan, 20, "one second is not enough");
+  feed(c, activity_level::walking, 1);
+  zassert_equal(out.fan, 50);
+  zassert_equal(c.activity_code(), 1);
+  feed(c, activity_level::running, 2);
+  zassert_equal(out.fan, 80);
+  zassert_equal(c.fan_speed(), 80);
+  zassert_equal(c.activity_code(), 2);
 }
 
-ZTEST(controller, test_motion_mode_never_raises_a_slow_fan) {
+ZTEST(controller, test_motion_mode_rising_needs_consecutive_seconds_and_goes_to_the_lower_level) {
   fake_outputs out;
   controller c{out};
-  c.update_settings({.mode = fan_mode::motion, .motion_idle_s = 5, .idle_speed = 20});
-  c.set_fan_speed(10);
-  c.motion(false, 6000);
-  zassert_equal(out.fan, 10);
-  unsigned calls = out.fan_calls;
-  c.set_fan_speed(50); // Changing the target while still keeps the idle speed.
-  zassert_equal(out.fan, 20);
-  zassert_equal(out.fan_calls, calls + 1, "a new target is reported even at the same speed");
-  zassert_equal(c.effective_fan_speed(), 20);
-  c.set_fan_speed(0);
-  zassert_equal(out.fan, 0);
+  c.update_settings({.mode = fan_mode::motion, .motion_delay_s = 10, .motion_speed = {20, 50, 80}});
+  feed(c, activity_level::running, 1);
+  feed(c, activity_level::still, 1);
+  feed(c, activity_level::running, 1);
+  zassert_equal(c.activity_code(), 0, "a still second resets the count");
+  feed(c, activity_level::running, 1);
+  zassert_equal(c.activity_code(), 2);
+
+  controller d{out};
+  d.update_settings({.mode = fan_mode::motion});
+  feed(d, activity_level::running, 1);
+  feed(d, activity_level::walking, 1);
+  zassert_equal(d.activity_code(), 1, "running then walking rises to walking");
 }
 
-ZTEST(controller, test_manual_mode_ignores_motion_and_mode_change_restores_target) {
+ZTEST(controller, test_motion_mode_slows_down_after_the_delay) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.mode = fan_mode::motion, .motion_delay_s = 10, .motion_speed = {20, 50, 80}});
+  feed(c, activity_level::running, 2);
+  feed(c, activity_level::walking, 9);
+  zassert_equal(out.fan, 80);
+  feed(c, activity_level::running, 1); // Back at the level: the countdown restarts.
+  feed(c, activity_level::walking, 9);
+  zassert_equal(out.fan, 80);
+  feed(c, activity_level::walking, 1);
+  zassert_equal(out.fan, 50);
+  feed(c, activity_level::still, 10);
+  zassert_equal(out.fan, 20);
+  zassert_equal(c.activity_code(), 0);
+}
+
+ZTEST(controller, test_motion_mode_buttons_and_remote_change_the_target_of_the_level) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.fan_step = 10, .mode = fan_mode::motion, .motion_delay_s = 10, .motion_speed = {20, 50, 80}});
+  c.set_fan_speed(95);
+  zassert_equal(out.fan, 95);
+  zassert_equal(c.settings().motion_speed[0], 95);
+  zassert_equal(out.saved.back().motion_speed[0], 95, "stored");
+  c.handle(button_event{button_action::plus, 1});
+  zassert_equal(out.fan, 100);
+  feed(c, activity_level::walking, 2);
+  c.handle(button_event{button_action::minus, 2});
+  zassert_equal(out.fan, 30);
+  zassert_equal(c.fan_speed(), 30);
+  zassert_true((c.settings().motion_speed == std::array<std::uint8_t, 3>{100, 30, 80}));
+}
+
+ZTEST(controller, test_manual_mode_ignores_activity_and_keeps_its_target) {
   fake_outputs out;
   controller c{out};
   c.set_fan_speed(60);
-  c.motion(false, 600'000);
+  feed(c, activity_level::running, 5);
   zassert_equal(out.fan, 60);
-  c.update_settings({.mode = fan_mode::motion, .motion_idle_s = 5});
-  c.motion(false, 6000);
+  zassert_equal(c.activity_code(), 255);
+  zassert_true(out.saved.empty());
+  c.update_settings({.mode = fan_mode::motion, .motion_speed = {20, 50, 80}});
   zassert_equal(out.fan, 20);
   c.update_settings({.mode = fan_mode::manual});
   zassert_equal(out.fan, 60);

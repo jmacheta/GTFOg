@@ -1,6 +1,7 @@
 #ifndef GTFOG_LOGIC_CONTROLLER_HPP
 #define GTFOG_LOGIC_CONTROLLER_HPP
 
+#include "accel.hpp"
 #include "battery.hpp"
 #include "buttons.hpp"
 
@@ -26,7 +27,7 @@ enum class signal {
 
 enum class fan_mode : std::uint8_t {
   manual = 0, // The fan runs at the speed the user set.
-  motion = 1, // The fan slows down to `idle_speed` while the head does not move.
+  motion = 1, // The fan speed follows the activity: one target per `activity_level`.
 };
 
 // User settings, kept in flash and written over Bluetooth.
@@ -36,15 +37,17 @@ struct device_settings {
   std::uint8_t auto_off_minutes{0}; // Power off after this long idle (fan and strobe off, no phone); 0 never.
   std::uint8_t fan_step{5};         // Fan change per button click, in %, 1..25.
   fan_mode mode{fan_mode::manual};
-  std::uint8_t motion_idle_s{60}; // Motion mode: seconds without movement before the fan slows down, 5..255.
-  std::uint8_t idle_speed{20};    // Motion mode: fan speed in % while still, 0..100.
+  std::uint8_t motion_delay_s{60};                       // Motion mode: seconds of lower activity before the fan slows down, 5..255.
+  std::array<std::uint8_t, 3> motion_speed{20, 50, 100}; // Motion mode: fan speed in % while still, walking, running, 0..100.
 
   friend auto operator==(device_settings const &, device_settings const &) -> bool = default;
 };
 
 // Wire and flash format: flags (bit 0 stealth, bit 1 transport lock), auto-off minutes, fan step, fan mode, motion idle
-// seconds, idle speed. The 2-byte format of firmware 0.2.0 (the first two fields) is still accepted.
-constexpr std::size_t settings_size = 6;
+// slow-down seconds, still, walking and running speed. The 6-byte format of firmware 0.3.1 (one speed, taken as the still
+// speed) and the 2-byte format of firmware 0.2.0 (the first two fields) are still accepted; missing fields keep their defaults.
+constexpr std::size_t settings_size = 8;
+constexpr std::size_t settings_size_v2 = 6;
 constexpr std::size_t settings_size_v1 = 2;
 [[nodiscard]] auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size>;
 [[nodiscard]] auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings>;
@@ -93,28 +96,33 @@ public:
   void configure(device_settings s) noexcept { cfg = s; }
   // Settings written by the user (Bluetooth): stored through `outputs::settings_changed`.
   void update_settings(device_settings s);
-  // Movement report for `elapsed_ms` of accelerometer data; only used in motion mode.
-  void motion(bool moving, unsigned elapsed_ms);
+  // Activity measured over one second of accelerometer data; only used in motion mode.
+  void observe(activity_level raw);
   // Counts idle time for the auto-off; call it periodically with the time since the last call.
   void elapsed(unsigned seconds, bool phone_connected);
 
-  [[nodiscard]] auto fan_speed() const noexcept -> unsigned { return fan; }
-  // What the fan runs at: the target, or the idle speed while standing still in motion mode.
-  [[nodiscard]] auto effective_fan_speed() const noexcept -> unsigned { return applied_fan.value_or(0); }
+  // What the fan runs at: the manual target, or in motion mode the target of the current activity level.
+  [[nodiscard]] auto fan_speed() const noexcept -> unsigned {
+    return cfg.mode == fan_mode::motion ? cfg.motion_speed[static_cast<unsigned>(level)] : fan;
+  }
+  // The current activity level for Bluetooth: 0 still, 1 walking, 2 running, 255 in manual mode.
+  [[nodiscard]] auto activity_code() const noexcept -> std::uint8_t { return cfg.mode == fan_mode::motion ? static_cast<std::uint8_t>(level) : 255; }
   [[nodiscard]] auto strobe() const noexcept -> bool { return strobe_on; }
   [[nodiscard]] auto battery_level() const noexcept -> std::uint8_t { return battery; }
   [[nodiscard]] auto settings() const noexcept -> device_settings { return cfg; }
 
 private:
   void change_fan_speed(int delta);
-  void apply_fan(bool force = false);
+  void apply_fan() { out.set_fan(fan_speed()); }
   void indicate(signal s);
   void power_off(signal s);
 
   outputs &out;
-  unsigned fan{0};                     // The user's target speed.
-  std::optional<unsigned> applied_fan; // What the fan runs at: the target, or less while still in motion mode.
-  unsigned still_ms{0};
+  unsigned fan{0}; // The manual mode target.
+  activity_level level{activity_level::still};
+  activity_level rising_to{activity_level::still}; // Lowest level seen while the raw level stayed above `level`.
+  unsigned rising_s{0};                            // Consecutive seconds above `level`.
+  unsigned falling_s{0};                           // Consecutive seconds below `level`.
   bool strobe_on{false};
   std::uint8_t battery{0};
   device_settings cfg;

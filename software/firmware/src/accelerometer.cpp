@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <optional>
 #include <tuple>
 
 LOG_MODULE_REGISTER(accelerometer, LOG_LEVEL_INF);
@@ -76,7 +77,7 @@ void accelerometer_thread(void *, void *, void *) {
       k_sem_take(&wanted_changed, retry_delay);
       continue;
     }
-    gtfog::motion_detector detector;
+    gtfog::activity_classifier classifier;
     std::uint16_t seq = 0;
     std::size_t filled = 0;
     bool was_streaming = false;
@@ -88,7 +89,7 @@ void accelerometer_thread(void *, void *, void *) {
       }
       was_streaming = streaming;
       std::size_t per_packet = streaming ? ble_accel_samples_per_packet() : 0;
-      bool moving = false;
+      std::optional<gtfog::activity_level> level;
       std::uint8_t status = 0;
       std::ignore = i2c_reg_read_byte_dt(&bus, reg_fifo_status, &status);
       for(unsigned i = 0; i < (status & 0x3fu); ++i) {
@@ -98,7 +99,9 @@ void accelerometer_thread(void *, void *, void *) {
         }
         gtfog::accel_sample sample{static_cast<std::int16_t>(raw[0] | raw[1] << 8), static_cast<std::int16_t>(raw[2] | raw[3] << 8),
                                    static_cast<std::int16_t>(raw[4] | raw[5] << 8)};
-        moving = detector.update(std::span{&sample, 1}) || moving;
+        if(auto done = classifier.update(std::span{&sample, 1})) {
+          level = done;
+        }
         if(per_packet == 0) {
           continue;
         }
@@ -110,8 +113,8 @@ void accelerometer_thread(void *, void *, void *) {
           per_packet = ble_accel_samples_per_packet();
         }
       }
-      if(motion_mode) {
-        with_controller([&](gtfog::controller &c) { c.motion(moving, poll_ms); });
+      if(motion_mode && level) {
+        with_controller([&](gtfog::controller &c) { c.observe(*level); });
       }
       k_msleep(poll_ms);
     }
