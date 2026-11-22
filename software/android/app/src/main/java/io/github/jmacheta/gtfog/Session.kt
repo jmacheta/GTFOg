@@ -8,12 +8,17 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.io.BufferedWriter
 import java.io.File
 import java.text.SimpleDateFormat
@@ -23,7 +28,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
-data class ScanItem(val device: BluetoothDevice, val name: String, val address: String, val rssi: Int)
+data class ScanItem(val device: BluetoothDevice, val name: String, val address: String, val rssi: Int) {
+    val label get() = deviceLabel(name, address)
+}
+
+private const val SCAN_TIMEOUT_MS = 30_000L
 
 data class Stats(val samples: Long = 0, val lost: Long = 0)
 
@@ -40,15 +49,27 @@ data class RecState(
 class Session(private val app: Application) {
     val ring = SampleRing(4096)
     val client = GtfogClient(app, ::onFrame, ::onReconnect)
+    val dfu = Dfu(app, client) { stopRecording(); client.setLive(false) } // the update needs the radio and the screen to itself
     val adapter = app.getSystemService(BluetoothManager::class.java)?.adapter
     val scanResults = MutableStateFlow<List<ScanItem>>(emptyList())
     val stats = MutableStateFlow(Stats())
     val rec = MutableStateFlow(RecState())
     val recordings = MutableStateFlow<List<File>>(emptyList())
+    val scanning = MutableStateFlow(false)
+    val scanError = MutableStateFlow<String?>(null)
+    val recError = MutableStateFlow<String?>(null)
+    private val prefs = app.getSharedPreferences("gtfog", Context.MODE_PRIVATE)
+    private val handler = Handler(Looper.getMainLooper())
+    private val scanTimeout = Runnable { stopScan() }
+
+    // Connect by itself to the last goggles only once per app start: after a Disconnect or a failure the user chooses.
+    private var autoConnect = true
+
+    val lastAddress: String? get() = prefs.getString("last", null)
 
     private val tracker = SeqTracker()
     private val io = Executors.newSingleThreadExecutor()
-    private var writer: BufferedWriter? = null
+    private var writer: BufferedWriter? = null // only touched on the io thread
     private val found = LinkedHashMap<String, ScanItem>()
 
     val dir: File
@@ -56,6 +77,9 @@ class Session(private val app: Application) {
 
     init {
         refreshRecordings()
+        // The link ended (also closed by the client: bad bond, not a GTFOg, failed first connect): nothing to record any more.
+        // Also Live going off (the accelerometer stream could not be enabled) leaves nothing to record.
+        MainScope().launch { client.state.collect { if (it.conn == Conn.Idle || (it.conn == Conn.Connected && !it.live)) stopRecording() } }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -63,43 +87,73 @@ class Session(private val app: Application) {
             val name = r.scanRecord?.deviceName ?: r.device.name ?: "GTFOg"
             found[r.device.address] = ScanItem(r.device, name, r.device.address, r.rssi)
             scanResults.value = found.values.sortedByDescending { it.rssi }
+            if (autoConnect && r.device.address == lastAddress && client.state.value.conn == Conn.Idle) connect(found.getValue(r.device.address))
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            handler.removeCallbacks(scanTimeout)
+            scanning.value = false
+            scanError.value = "Scan failed (error $errorCode)"
         }
     }
 
     fun startScan() {
+        if (adapter?.isEnabled != true) return
+        stopScan()
+        scanError.value = null
         found.clear()
         scanResults.value = emptyList()
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(Uuids.SERVICE)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        adapter?.bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
+        adapter.bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
+        scanning.value = true
+        handler.postDelayed(scanTimeout, SCAN_TIMEOUT_MS)
     }
 
     fun stopScan() {
+        handler.removeCallbacks(scanTimeout)
+        scanning.value = false
         if (adapter?.isEnabled == true) adapter.bluetoothLeScanner?.stopScan(scanCallback)
     }
 
     fun connect(item: ScanItem) {
+        autoConnect = false
+        prefs.edit().putString("last", item.address).apply()
         tracker.reset()
+        ring.clear()
         stats.value = Stats()
-        client.connect(item.device, item.name)
+        dfu.forget()
+        client.connect(item.device, item.label)
     }
 
     fun disconnect() {
+        autoConnect = false
         stopRecording()
         client.disconnect()
     }
 
+    /** Live and a recording end first: the link is gone for the whole test. */
+    fun startRfTest(channel: Int, seconds: Int) {
+        if (dfu.state.value.running) return
+        stopRecording()
+        client.setLive(false)
+        client.startRfTest(channel, seconds)
+    }
+
     fun setLive(on: Boolean) {
+        if (on && dfu.state.value.running) return
         if (on) {
             tracker.reset()
+            ring.clear()
             stats.value = Stats()
         }
         client.setLive(on)
     }
 
     private fun onFrame(now: Long, f: AccelFrame) {
+        if (!tracker.onFrame(f.seq)) return // duplicate or reordered: not plotted, not recorded
+        if (f.rateHz > 0) ring.rateHz = f.rateHz
         f.samples.forEach(ring::add)
-        tracker.onFrame(f.seq)
         stats.update { Stats(it.samples + f.samples.size, tracker.lost) }
         if (rec.value.active) {
             write(csvLines(now, f))
@@ -109,35 +163,58 @@ class Session(private val app: Application) {
 
     private fun onReconnect(now: Long) {
         tracker.resync()
+        if (!dfu.state.value.running) dfu.forget() // an outside change (SWD flash, another phone) may have swapped the firmware
         if (rec.value.active) write(csvReconnect(now))
     }
 
     private fun write(text: String) {
-        val w = writer ?: return
-        io.execute { runCatching { w.write(text); w.flush() } }
+        io.execute { writer?.let { w -> runCatching { w.write(text); w.flush() }.onFailure(::recordingFailed) } }
+    }
+
+    private fun recordingFailed(e: Throwable) {
+        handler.post {
+            recError.value = "Recording failed: ${e.message ?: e.javaClass.simpleName}"
+            stopRecording()
+        }
     }
 
     fun startRecording() {
-        if (rec.value.active) return
+        if (rec.value.active || dfu.state.value.running) return
         val now = Date()
-        val name = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now) + ".csv"
-        writer = File(dir, name).bufferedWriter()
+        val base = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
+        // Stop and Record within one second must not overwrite the earlier file.
+        val name = uniqueCsvName(base) { File(dir, it).exists() }
+        recError.value = null
+        // Opened on the io thread, before the first write queued after it; a full or missing storage ends here, not in a crash.
+        io.execute {
+            runCatching { writer = File(dir, name).bufferedWriter() }.onSuccess { handler.post(::refreshRecordings) }.onFailure(::recordingFailed)
+        }
         val d = client.state.value
-        val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=100 Hz"
+        val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=${ring.rateHz} Hz"
         write(csvPreamble(ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME), info))
         rec.value = RecState(name, now.time, 0, 0, true)
         if (!d.live) setLive(true)
-        ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java))
-        refreshRecordings()
+        // The service starts only once the file exists.
+        io.execute { if (writer != null) handler.post(::startService) }
+    }
+
+    private fun startService() {
+        if (!rec.value.active) return
+        // API 31+ refuses a foreground service started just after the app left the foreground.
+        runCatching { ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java)) }.onFailure {
+            recError.value = "Recording failed: the system did not allow the background service (${it.message ?: it.javaClass.simpleName})"
+            stopRecording()
+        }
     }
 
     fun stopRecording() {
         if (!rec.value.active) return
-        val w = writer
-        writer = null
-        io.execute { runCatching { w?.close() } }
+        io.execute {
+            runCatching { writer?.close() }
+            writer = null
+            handler.post(::refreshRecordings) // after the close, so the listed size is final
+        }
         rec.update { it.copy(active = false, endMs = System.currentTimeMillis()) }
-        refreshRecordings()
     }
 
     fun refreshRecordings() {

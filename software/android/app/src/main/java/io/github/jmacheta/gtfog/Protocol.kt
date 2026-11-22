@@ -12,6 +12,10 @@ object Uuids {
     val ACCEL: UUID = UUID.fromString("a7f00004-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val CHARGER: UUID = UUID.fromString("a7f00005-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val SETTINGS: UUID = UUID.fromString("a7f00006-5c1e-4b8e-9d2a-6f0e1c3b4d50")
+    /** Speed the fan runs at and the activity level (firmware 0.3+; the level only from 0.3.2). */
+    val FAN_ACTUAL: UUID = UUID.fromString("a7f00007-5c1e-4b8e-9d2a-6f0e1c3b4d50")
+    /** Write only, firmware 0.3.11+: [channel, seconds] starts an RF carrier test, see [encodeRfTest]. */
+    val RF_TEST: UUID = UUID.fromString("a7f00008-5c1e-4b8e-9d2a-6f0e1c3b4d50")
     val BATTERY: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
     val MODEL: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
     val MANUFACTURER: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
@@ -48,31 +52,141 @@ fun chargerText(raw: Int): String = when (raw) {
     else -> "Unknown"
 }
 
-/** Settings stored on the device: byte 0 flags (bit 0 stealth, bit 1 transport lock), byte 1 auto shutdown in minutes (0 = never). */
-data class DeviceSettings(val stealth: Boolean, val transportLock: Boolean, val autoOffMin: Int) {
-    fun encode(): ByteArray =
-        byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0)).toByte(), autoOffMin.coerceIn(0, 255).toByte())
+/**
+ * Settings stored on the device. Bytes: 0 flags (bit 0 stealth, bit 1 transport lock), 1 auto shutdown in minutes (0 = never),
+ * 2 fan step per click in % (1..25), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255), 5..7 fan in % (0..100)
+ * while still, walking, running. [size] is the length the device uses: 2 (bytes 0..1 only), 6 (byte 5 is the still speed) or 8.
+ */
+data class DeviceSettings(
+    val stealth: Boolean,
+    val transportLock: Boolean,
+    val autoOffMin: Int,
+    val fanStep: Int = 5,
+    val motion: Boolean = false,
+    val motionDelayS: Int = 60,
+    val motionSpeeds: List<Int> = listOf(20, 50, 100),
+    val size: Int = 8,
+    /** Flag bits above bit 1 as read from the device (future firmware); written back unchanged. */
+    val otherFlags: Int = 0,
+) {
+    val extended get() = size >= 6
+    val perActivity get() = size >= 8
+
+    /** Always the length the device uses: 2, 6 or 8 bytes. */
+    fun encode(): ByteArray {
+        val head = byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0) or otherFlags).toByte(), autoOffMin.coerceIn(0, 255).toByte())
+        if (!extended) return head
+        val speeds = motionSpeeds.take(if (perActivity) 3 else 1).map { it.coerceIn(0, 100).toByte() }
+        return head + byteArrayOf(
+            fanStep.coerceIn(1, 25).toByte(), (if (motion) 1 else 0).toByte(), motionDelayS.coerceIn(5, 255).toByte(),
+        ) + speeds.toByteArray()
+    }
 }
 
-fun parseSettings(b: ByteArray): DeviceSettings? =
-    if (b.size != 2) null else DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1))
+fun parseSettings(b: ByteArray): DeviceSettings? {
+    // Longer than 8 (future firmware): the known 8 bytes are read, the rest is ignored.
+    if (b.size != 2 && b.size != 6 && b.size < 8) return null
+    val size = minOf(b.size, 8)
+    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = size, otherFlags = u8(b, 0) and 0xFC)
+    if (size == 2) return base
+    val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < size) u8(b, 5 + i) else default }
+    // Corrupt or future firmware: keep the values in the ranges the UI and stepFan can work with.
+    return base.copy(
+        fanStep = u8(b, 2).coerceIn(1, 25), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4).coerceIn(5, 255),
+        motionSpeeds = speeds.map { it.coerceIn(0, 100) },
+    )
+}
 
-/** Counts frames and frames missing between consecutive sequence numbers (u16, wrapping). */
+/** Fan speed in % and activity level (0 still, 1 walking, 2 running; null in manual mode or from old firmware). */
+data class FanActual(val percent: Int, val level: Int?)
+
+fun parseFanActual(b: ByteArray): FanActual? {
+    if (b.isEmpty()) return null // longer than 2: future firmware, the extra bytes are ignored
+    return FanActual(u8(b, 0), if (b.size >= 2 && u8(b, 1) in 0..2) u8(b, 1) else null)
+}
+
+val ACTIVITY_NAMES = listOf("Still", "Walking", "Running")
+
+/** Last two address bytes tell two goggles apart: "GTFOg · B3:0B". */
+fun deviceLabel(name: String, address: String) = "$name \u00b7 ${address.takeLast(5)}"
+
+fun batteryDescription(level: Int?, charger: Int?): String = when {
+    charger == 3 -> "Battery, charger fault"
+    level == null -> "Battery level unknown"
+    charger == 1 -> "Battery $level %, charging"
+    else -> "Battery $level %"
+}
+
+const val RF_TEST_DEFAULT_CHANNEL = 19
+val RF_TEST_SECONDS = listOf(10, 30, 60, 120)
+
+/** Carrier frequency in MHz of a BLE channel index 0..39 (37, 38, 39 advertise); null outside it. The firmware uses the same table. */
+fun rfTestMhz(channel: Int): Int? = when (channel) {
+    37 -> 2402
+    38 -> 2426
+    39 -> 2480
+    in 0..10 -> 2404 + 2 * channel
+    in 11..36 -> 2428 + 2 * (channel - 11)
+    else -> null
+}
+
+/** The RF test characteristic payload: BLE channel index and seconds (1..255). */
+fun encodeRfTest(channel: Int, seconds: Int): ByteArray {
+    require(rfTestMhz(channel) != null) { "channel $channel" }
+    return byteArrayOf(channel.toByte(), seconds.coerceIn(1, 255).toByte())
+}
+
+fun rfTestConfirmText(channel: Int, seconds: Int) =
+    "The goggles will drop the connection and transmit a carrier on ${rfTestMhz(channel)} MHz for $seconds s. " +
+        "Press any button on the goggles to stop earlier. They restart afterwards and the app reconnects."
+
+/** Whole seconds left until [endsMs], rounded up; 0 when it has passed. */
+fun rfTestRemainingS(endsMs: Long, nowMs: Long): Int = ((endsMs - nowMs + 999) / 1000).coerceAtLeast(0).toInt()
+
+const val DFU_MIN_BATTERY = 50
+
+/** Why a firmware update must not start now (a flat battery during the swap is the risk); null if allowed. */
+fun dfuBlockReason(battery: Int?): String? = when {
+    battery == null -> "Charge to at least $DFU_MIN_BATTERY % to update (battery level unknown)"
+    battery < DFU_MIN_BATTERY -> "Charge to at least $DFU_MIN_BATTERY % to update (now $battery %)"
+    else -> null
+}
+
+/** Fan speed one step up (dir 1) or down (dir -1), kept within 0..100 %. */
+fun stepFan(fan: Int, dir: Int, step: Int) = (fan + dir * step).coerceIn(0, 100)
+
+/** Human-readable text for a BluetoothGatt connection status. */
+fun gattErrorText(status: Int): String = when (status) {
+    8 -> "Out of range"
+    19 -> "The goggles closed the connection"
+    0, 22 -> "Connection closed"
+    133 -> "Could not connect, try again"
+    else -> "Connection failed (status $status)"
+}
+
+/** Counts frames accepted, frames missing between consecutive sequence numbers (u16, wrapping) and duplicate or reordered frames dropped. */
 class SeqTracker {
     private var last = -1
     var frames = 0L
         private set
     var lost = 0L
         private set
+    var dropped = 0L
+        private set
 
-    fun onFrame(seq: Int) {
-        frames++
+    /** True if the frame is newer than the last accepted one; false (counted in [dropped]) for a duplicate or reordered frame. */
+    fun onFrame(seq: Int): Boolean {
         if (last >= 0) {
             val gap = (seq - last - 1) and 0xFFFF
-            if (gap >= 0x8000) return // duplicate or reordered frame
+            if (gap >= 0x8000) {
+                dropped++
+                return false
+            }
             lost += gap
         }
+        frames++
         last = seq
+        return true
     }
 
     /** Forgets the last seq so a stream restart is not counted as loss. */
@@ -84,6 +198,7 @@ class SeqTracker {
         resync()
         frames = 0
         lost = 0
+        dropped = 0
     }
 }
 
@@ -93,6 +208,9 @@ class SampleRing(private val cap: Int) {
     private val ys = IntArray(cap)
     private val zs = IntArray(cap)
     private var total = 0L
+
+    /** Samples per second of the last frame (the protocol field; the firmware sends 100). */
+    @Volatile var rateHz = 100
 
     @Synchronized
     fun add(s: Sample) {
@@ -166,4 +284,40 @@ fun csvReconnect(ms: Long): String = "# reconnect at $ms\n"
 fun formatDuration(ms: Long): String {
     val s = ms / 1000
     return String.format(Locale.US, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+}
+
+/** [base].csv, or [base]_1.csv, [base]_2.csv ... for the first name [exists] does not know (Stop and Record within one second). */
+fun uniqueCsvName(base: String, exists: (String) -> Boolean): String {
+    var name = "$base.csv"
+    var n = 1
+    while (exists(name)) name = "${base}_${n++}.csv"
+    return name
+}
+
+/** The state after the link ended: kept (the client retries) for Reconnect and RetryFirst, otherwise reset with [message] as the error. */
+fun DeviceState.afterLost(next: Next, message: String): DeviceState = when (next) {
+    Next.Reconnect -> copy(conn = Conn.Reconnecting, error = null)
+    Next.RetryFirst -> this // still "Connecting"
+    else -> DeviceState(error = message)
+}
+
+/** True if the client goes on trying to connect after [next]. */
+fun keepsTrying(next: Next) = next == Next.Reconnect || next == Next.RetryFirst
+
+/** The state after a notification or read of [u] with [v]; [pending] = a write to [u] is queued, so the older value is ignored. */
+fun DeviceState.withValue(u: UUID, v: ByteArray, pending: Boolean): DeviceState {
+    if (pending) return this
+    if (u == Uuids.SETTINGS) return parseSettings(v)?.let { copy(settings = it) } ?: this
+    if (v.isEmpty()) return this
+    val b = v[0].toInt() and 0xFF
+    return when (u) {
+        Uuids.FAN -> copy(fan = b)
+        Uuids.FAN_ACTUAL -> parseFanActual(v)?.let { copy(fanActual = it.percent, activity = it.level) } ?: this
+        Uuids.STROBE -> copy(strobe = b != 0)
+        Uuids.CHARGER -> copy(charger = b)
+        Uuids.BATTERY -> copy(battery = b)
+        Uuids.MODEL -> copy(model = v.decodeToString())
+        Uuids.MANUFACTURER -> copy(manufacturer = v.decodeToString())
+        else -> this
+    }
 }

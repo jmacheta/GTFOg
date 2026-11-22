@@ -6,12 +6,16 @@
 #include <zephyr/logging/log.h>
 
 #include <chrono>
+#include <tuple>
 
 LOG_MODULE_REGISTER(buttons, LOG_LEVEL_INF);
+
+using gtfog::with_controller;
 
 namespace {
 
 constexpr auto poll_interval = K_MSEC(20);
+constexpr auto fault_signal_delay = K_SECONDS(2); // Lets the power-on signal finish first.
 
 gpio_dt_spec const plus = GPIO_DT_SPEC_GET(DT_NODELABEL(button_plus), gpios);
 gpio_dt_spec const minus = GPIO_DT_SPEC_GET(DT_NODELABEL(button_minus), gpios);
@@ -37,38 +41,56 @@ auto setup(gpio_dt_spec const &button, gpio_callback &callback) -> int {
   return gpio_add_callback_dt(&button, &callback);
 }
 
+int init_error = 0;
+
 auto buttons_init() -> int {
-  if(int err = setup(plus, plus_callback); err != 0) {
-    return err;
-  }
-  return setup(minus, minus_callback);
+  init_error = setup(plus, plus_callback);
+  init_error = init_error ?: setup(minus, minus_callback);
+  return init_error;
 }
 
 SYS_INIT(buttons_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 void buttons_thread(void *, void *, void *) {
   gtfog::button_gestures gestures;
+  gestures.wait_for_release(); // The press that woke the device may still be going on.
+  if(init_error != 0) {
+    LOG_ERR("buttons: %d", init_error);
+    // ponytail: no interrupts, so only the polling below could work; show the fault once, after the power-on signal.
+    k_sleep(fault_signal_delay);
+    with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
+  }
   while(true) {
     auto now = std::chrono::milliseconds{k_uptime_get()};
-    if(auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now)) {
-      with_controller([&](gtfog::controller &c) { c.handle(*event); });
+    auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now);
+    if(event && !gtfog::rf_test_running()) {
+      with_controller([&](gtfog::controller &control) { control.handle(*event); });
     }
-    k_sem_take(&button_changed, gestures.is_idle() ? K_FOREVER : poll_interval);
+    k_sem_take(&button_changed, (init_error != 0 || !gestures.is_idle()) ? poll_interval : K_FOREVER);
   }
 }
 
-K_THREAD_DEFINE(buttons, 1024, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 0);
+K_THREAD_DEFINE(buttons, 2048, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 0);
 
 } // namespace
 
-void buttons_arm_wake() {
+auto gtfog::buttons_pressed() -> bool { return gpio_pin_get_dt(&plus) > 0 || gpio_pin_get_dt(&minus) > 0; }
+
+void gtfog::buttons_arm_wake() {
   constexpr auto release_timeout_ms = 10'000;
   for(int waited = 0; waited < release_timeout_ms && (gpio_pin_get_dt(&plus) > 0 || gpio_pin_get_dt(&minus) > 0); waited += 10) {
     k_msleep(10);
   }
-  gpio_remove_callback_dt(&plus, &plus_callback);
-  gpio_remove_callback_dt(&minus, &minus_callback);
-  if(gpio_pin_interrupt_configure_dt(&plus, GPIO_INT_LEVEL_ACTIVE) != 0 || gpio_pin_interrupt_configure_dt(&minus, GPIO_INT_LEVEL_ACTIVE) != 0) {
+  // A button still held would wake the chip at once, so a stuck one is left out; with both held there is no choice.
+  bool plus_held = gpio_pin_get_dt(&plus) > 0;
+  bool minus_held = gpio_pin_get_dt(&minus) > 0;
+  auto arm = [](gpio_dt_spec const &button, bool on) {
+    return gpio_pin_interrupt_configure_dt(&button, on ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
+  };
+  // Not registered when setup failed (-EINVAL); the level interrupts below do not need the callbacks.
+  std::ignore = gpio_remove_callback_dt(&plus, &plus_callback);
+  std::ignore = gpio_remove_callback_dt(&minus, &minus_callback);
+  if(arm(plus, !plus_held || minus_held) != 0 || arm(minus, !minus_held || plus_held) != 0) {
     LOG_ERR("cannot arm the buttons for wake-up");
   }
 }

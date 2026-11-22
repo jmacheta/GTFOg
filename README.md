@@ -10,7 +10,7 @@ board with a Li-ion battery, USB-C and two buttons.
 - Efficient blower fan
 - Internal battery with up to 2000 mAh capacity
 - USB-C charging; firmware update over Bluetooth (mcumgr SMP, MCUboot swap with revert), USB serial recovery in the bootloader
-- Integrated Accelerometer (ADXL345) for dynamic fan speed control (streamed over Bluetooth, the fan is not driven by it yet)
+- Integrated Accelerometer (ADXL345) for dynamic fan speed control (streamed over Bluetooth, and drives the fan in motion mode)
 - Built-in Red Strobe light (in case you forgot to bring one with you ;))
 - RGB status LED and two buttons (plus, minus) for manual fan control
 - Bluetooth Low Energy: fan speed and strobe control, battery level, charger state, accelerometer stream, firmware update (Android app WIP)
@@ -23,7 +23,7 @@ The firmware targets nRF Connect SDK v3.4.0 (Zephyr 4.4.0).
 In a new workspace:
 
 ```sh
-west init -m git@github.com:jmacheta/GTFOg.git --mr dev gtfog-workspace
+west init -m git@github.com:jmacheta/GTFOg.git --mr main gtfog-workspace
 cd gtfog-workspace && west update
 west build -b gtfog GTFOg/software/firmware
 ```

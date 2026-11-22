@@ -1,4 +1,4 @@
-#include "battery.hpp"
+#include "battery_model.hpp"
 
 #include <array>
 #include <utility>
@@ -31,10 +31,11 @@ auto battery_percentage(int millivolts) noexcept -> std::uint8_t {
     return 0;
   }
   for(std::size_t i = 1; i != curve.size(); ++i) {
-    auto [v1, p1] = curve[i];
-    if(millivolts < v1) {
-      auto [v0, p0] = curve[i - 1];
-      return static_cast<std::uint8_t>(p0 + (millivolts - v0) * (p1 - p0) / (v1 - v0));
+    auto [upper_millivolts, upper_percent] = curve[i];
+    if(millivolts < upper_millivolts) {
+      auto [lower_millivolts, lower_percent] = curve[i - 1];
+      return static_cast<std::uint8_t>(lower_percent +
+                                       (millivolts - lower_millivolts) * (upper_percent - lower_percent) / (upper_millivolts - lower_millivolts));
     }
   }
   return 100;
