@@ -15,7 +15,7 @@
 The repo has `west.yml` (imports `sdk-nrf` v3.4.0, self path `GTFOg`) and `zephyr/module.yml` (`board_root: software`).
 
 ```sh
-west init -m git@github.com:jmacheta/GTFOg.git --mr dev gtfog-workspace
+west init -m git@github.com:jmacheta/GTFOg.git --mr main gtfog-workspace
 cd gtfog-workspace && west update
 west build -b gtfog GTFOg/software/firmware
 ```

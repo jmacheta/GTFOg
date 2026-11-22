@@ -23,7 +23,7 @@ The firmware targets nRF Connect SDK v3.4.0 (Zephyr 4.4.0).
 In a new workspace:
 
 ```sh
-west init -m git@github.com:jmacheta/GTFOg.git --mr dev gtfog-workspace
+west init -m git@github.com:jmacheta/GTFOg.git --mr main gtfog-workspace
 cd gtfog-workspace && west update
 west build -b gtfog GTFOg/software/firmware
 ```
