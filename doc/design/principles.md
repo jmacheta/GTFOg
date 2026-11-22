@@ -16,14 +16,17 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 
 ## Structure
 
-- **Pure logic apart from the board.** `src/logic/` has no Zephyr includes and is built twice: into the firmware and
-  into the host tests. It holds the button gesture detector (`button_gestures`), the battery functions
-  (`decode_charger_state`, `battery_percentage`, `battery_guard`), the accelerometer packet (`pack_accel`) and
-  `activity_classifier`, and the `controller` with `fan_duty_permille` and `pwm_pulse_ns`.
-- **Behavior goes into `src/logic` and gets a test; board files stay thin.** The board layer in `src/` only reads
+- **Pure logic apart from the board.** `gestures`, `battery_model`, `motion` and `controller` (headers in `src/include/`,
+  sources in `src/`, listed in `src/logic.cmake`) have no Zephyr includes and are built twice: into the firmware and into
+  the host tests. They hold the button gesture detector (`button_gestures`), the battery functions
+  (`decode_charger_state`, `battery_percentage`, `battery_guard`), the accelerometer packet
+  (`pack_accelerometer_samples`) and `activity_classifier`, and the `controller` with `fan_duty_permille` and `pwm_pulse_ns`.
+- **Behavior goes into the pure logic and gets a test; board files stay thin.** The board layer in `src/` only reads
   hardware, passes values to the logic and carries out its outputs.
-- **One controller behind a mutex.** Inputs (buttons, BLE writes, battery samples) call `controller` methods through
-  `with_controller` (`app.hpp`); actions run in the calling thread. The controller drives hardware only through the
+- **One controller behind a mutex, as one state machine.** The controller is a Boost.SML transition table
+  (`controller_table`): inputs (buttons, BLE writes, battery samples) call `controller` methods through
+  `with_controller` (`app.hpp`), which turn them into events; actions run in the calling thread. New behavior is a new
+  row, guard or action in that table, with the computing done in plain functions. The controller drives hardware only through the
   abstract `outputs` interface, implemented by `board_outputs` in `board.cpp` (PWM fan, strobe and RGB LED, System OFF)
   and by a fake in the tests.
 - **Never wait for the system workqueue while holding the mutex.** BLE notifications take the mutex on the workqueue, so
@@ -39,11 +42,12 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 - **Errors** in the board layer are negative errno ints; the logic has no failure paths.
 - **Deliberate simplifications and calibration constants** carry a `ponytail:` comment naming the ceiling or what to
   measure.
-- **No third-party libraries** beyond Zephyr and the C++ standard library.
+- **One third-party library** beyond Zephyr and the C++ standard library: header-only Boost.SML for the controller,
+  fetched by CMake at a pinned version and hash.
 
 ## Out of scope
 
 - A bootloader of our own: MCUboot comes from NCS.
 - A fuel gauge: the battery percentage is a voltage curve (see [firmware.md](../firmware.md#battery-and-charger)).
 - A C API or a generic HAL: the code targets this one board.
-- Unit tests of hardware access: only `src/logic` is tested.
+- Unit tests of hardware access: only the pure logic is tested.

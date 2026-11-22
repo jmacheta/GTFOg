@@ -1,4 +1,4 @@
-#include "accel.hpp"
+#include "motion.hpp"
 
 #include <zephyr/ztest.h>
 
@@ -7,9 +7,9 @@
 
 using namespace gtfog;
 
-ZTEST_SUITE(accel, nullptr, nullptr, nullptr, nullptr, nullptr);
+ZTEST_SUITE(motion, nullptr, nullptr, nullptr, nullptr, nullptr);
 
-ZTEST(accel, test_counts_to_milli_g) {
+ZTEST(motion, test_counts_to_milli_g) {
   zassert_equal(counts_to_milli_g(0), 0);
   zassert_equal(counts_to_milli_g(256), 998); // About 1 g.
   zassert_equal(counts_to_milli_g(-256), -998);
@@ -18,17 +18,17 @@ ZTEST(accel, test_counts_to_milli_g) {
   zassert_equal(counts_to_milli_g(-32768), -15974);
 }
 
-ZTEST(accel, test_samples_per_packet) {
-  zassert_equal(accel_samples_per_packet(23), 2); // Default ATT MTU: 20-byte payload.
-  zassert_equal(accel_samples_per_packet(247), 40);
-  zassert_equal(accel_samples_per_packet(517), 40);
-  zassert_equal(accel_samples_per_packet(5), 0);
+ZTEST(motion, test_samples_per_packet) {
+  zassert_equal(accelerometer_samples_per_packet(23), 2); // Default ATT MTU: 20-byte payload.
+  zassert_equal(accelerometer_samples_per_packet(247), 40);
+  zassert_equal(accelerometer_samples_per_packet(517), 40);
+  zassert_equal(accelerometer_samples_per_packet(5), 0);
 }
 
-ZTEST(accel, test_pack_layout) {
-  std::array<accel_sample, 2> samples{{{256, -256, 0}, {1, 2, -3}}};
-  std::array<std::uint8_t, accel_header_size + 2 * accel_sample_size> out{};
-  auto len = pack_accel(0x1234, 100, samples, out);
+ZTEST(motion, test_pack_layout) {
+  std::array<accelerometer_sample, 2> samples{{{256, -256, 0}, {1, 2, -3}}};
+  std::array<std::uint8_t, accelerometer_header_size + 2 * accelerometer_sample_size> out{};
+  auto len = pack_accelerometer_samples(0x1234, 100, samples, out);
   zassert_equal(len, out.size());
   zassert_equal(out[0], 0x34);
   zassert_equal(out[1], 0x12);
@@ -45,7 +45,7 @@ namespace {
 // One second of samples whose magnitude alternates between 1 g and 1 g + `swing` counts: the deviation is half the swing.
 auto classify_second(int swing) -> std::optional<activity_level> {
   activity_classifier classifier;
-  std::array<accel_sample, 50> batch{};
+  std::array<accelerometer_sample, 50> batch{};
   std::optional<activity_level> level;
   for(int half = 0; half != 2; ++half) {
     for(std::size_t i = 0; i != batch.size(); ++i) {
@@ -59,7 +59,7 @@ auto classify_second(int swing) -> std::optional<activity_level> {
 
 } // namespace
 
-ZTEST(accel, test_activity_levels) {
+ZTEST(motion, test_activity_levels) {
   zassert_equal(classify_second(0), activity_level::still);
   zassert_equal(classify_second(8), activity_level::still);     // About 31 mg deviation.
   zassert_equal(classify_second(60), activity_level::walking);  // About 117 mg.
@@ -67,9 +67,9 @@ ZTEST(accel, test_activity_levels) {
   zassert_equal(classify_second(200), activity_level::running); // About 390 mg.
 }
 
-ZTEST(accel, test_activity_ignores_gravity_and_reports_every_second) {
+ZTEST(motion, test_activity_ignores_gravity_and_reports_every_second) {
   activity_classifier classifier;
-  std::array<accel_sample, 30> tilted{};
+  std::array<accelerometer_sample, 30> tilted{};
   tilted.fill({256, 0, 0}); // Any constant orientation is still.
   int reports = 0;
   for(int i = 0; i != 20; ++i) {
@@ -81,21 +81,21 @@ ZTEST(accel, test_activity_ignores_gravity_and_reports_every_second) {
   zassert_equal(reports, 6); // 600 samples.
 }
 
-ZTEST(accel, test_pack_refuses_a_buffer_that_is_too_small) {
-  std::array<accel_sample, 2> samples{};
-  std::array<std::uint8_t, accel_header_size + 2 * accel_sample_size - 1> small{};
+ZTEST(motion, test_pack_refuses_a_buffer_that_is_too_small) {
+  std::array<accelerometer_sample, 2> samples{};
+  std::array<std::uint8_t, accelerometer_header_size + 2 * accelerometer_sample_size - 1> small{};
   small.fill(0xaa);
-  zassert_equal(pack_accel(1, 100, samples, small), 0);
+  zassert_equal(pack_accelerometer_samples(1, 100, samples, small), 0);
   zassert_equal(small[0], 0xaa, "nothing written");
 }
 
-ZTEST(accel, test_fifo_status_decoding) {
+ZTEST(motion, test_fifo_status_decoding) {
   zassert_equal(fifo_entries(0x9f), 0x1f);
   zassert_false(fifo_overflowed(0x1f));
   zassert_true(fifo_overflowed(0x20));
 }
 
-ZTEST(accel, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_third) {
+ZTEST(motion, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_third) {
   fifo_watchdog dog;
   using verdict = fifo_watchdog::verdict;
   for(int i = 0; i != 4; ++i) {
@@ -110,7 +110,7 @@ ZTEST(accel, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_thir
   zassert_equal(dog.poll(false, 1000), verdict::recover, "lost is reported once");
 }
 
-ZTEST(accel, test_activity_thresholds_are_80_and_300_mg) {
+ZTEST(motion, test_activity_thresholds_are_80_and_300_mg) {
   // Swings of 40 and 42 counts alternate magnitudes 156 and 164 mg apart: deviations 78 and 82 mg; 153 and 154 counts: 298.5 and 300.5 mg.
   zassert_equal(classify_second(40), activity_level::still);
   zassert_equal(classify_second(42), activity_level::walking);
@@ -118,9 +118,9 @@ ZTEST(accel, test_activity_thresholds_are_80_and_300_mg) {
   zassert_equal(classify_second(154), activity_level::running);
 }
 
-ZTEST(accel, test_activity_window_may_span_chunks_of_any_size) {
+ZTEST(motion, test_activity_window_may_span_chunks_of_any_size) {
   activity_classifier classifier;
-  std::array<accel_sample, 30> chunk{};
+  std::array<accelerometer_sample, 30> chunk{};
   int reports = 0;
   std::optional<activity_level> last;
   for(int i = 0; i != 7; ++i) { // 210 samples: windows complete inside chunks 4 and 7.

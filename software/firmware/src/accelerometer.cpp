@@ -1,7 +1,7 @@
 // ADXL345 over raw I2C: 100 Hz, +-16 g full resolution, FIFO in stream mode. Powered only while a phone subscribes to
 // the stream or the fan follows movement; samples go to Bluetooth and to the motion detector.
-#include "accel.hpp"
 #include "app.hpp"
+#include "motion.hpp"
 
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
@@ -80,8 +80,8 @@ void sensor_gone() {
 }
 
 void accelerometer_thread(void *, void *, void *) {
-  std::array<gtfog::accel_sample, gtfog::accel_max_samples> batch{};
-  std::array<std::uint8_t, gtfog::accel_header_size + gtfog::accel_sample_size * gtfog::accel_max_samples> packet{};
+  std::array<gtfog::accelerometer_sample, gtfog::accelerometer_max_samples> batch{};
+  std::array<std::uint8_t, gtfog::accelerometer_header_size + gtfog::accelerometer_sample_size * gtfog::accelerometer_max_samples> packet{};
 
   using verdict = gtfog::fifo_watchdog::verdict;
   gtfog::fifo_watchdog watchdog;
@@ -115,7 +115,7 @@ void accelerometer_thread(void *, void *, void *) {
         filled = 0;
       }
       was_streaming = streaming;
-      std::size_t per_packet = streaming ? ble_accel_samples_per_packet() : 0;
+      std::size_t per_packet = streaming ? ble_accelerometer_samples_per_packet() : 0;
       std::optional<gtfog::activity_level> level;
       std::uint8_t status = 0;
       bool healthy = i2c_reg_read_byte_dt(&bus, reg_fifo_status, &status) == 0 && gtfog::fifo_entries(status) != 0;
@@ -130,8 +130,8 @@ void accelerometer_thread(void *, void *, void *) {
           healthy = false;
           continue;
         }
-        gtfog::accel_sample sample{static_cast<std::int16_t>(raw[0] | raw[1] << 8), static_cast<std::int16_t>(raw[2] | raw[3] << 8),
-                                   static_cast<std::int16_t>(raw[4] | raw[5] << 8)};
+        gtfog::accelerometer_sample sample{static_cast<std::int16_t>(raw[0] | raw[1] << 8), static_cast<std::int16_t>(raw[2] | raw[3] << 8),
+                                           static_cast<std::int16_t>(raw[4] | raw[5] << 8)};
         if(auto done = classifier.update(std::span{&sample, 1})) {
           level = done;
         }
@@ -140,10 +140,10 @@ void accelerometer_thread(void *, void *, void *) {
         }
         batch[filled++] = sample;
         if(filled >= per_packet) {
-          auto len = gtfog::pack_accel(seq++, rate_hz, std::span{batch.data(), filled}, packet);
-          ble_accel_send(std::span{packet.data(), len});
+          auto len = gtfog::pack_accelerometer_samples(seq++, rate_hz, std::span{batch.data(), filled}, packet);
+          ble_accelerometer_send(std::span{packet.data(), len});
           filled = 0;
-          per_packet = ble_accel_samples_per_packet();
+          per_packet = ble_accelerometer_samples_per_packet();
         }
       }
       if(motion_mode && level) {

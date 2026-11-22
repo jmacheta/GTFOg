@@ -1,6 +1,6 @@
 // Bluetooth LE peripheral: the GTFOg control service, Battery Service and Device Information Service.
-#include "accel.hpp"
 #include "app.hpp"
+#include "motion.hpp"
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -29,7 +29,7 @@ namespace {
 bt_uuid_128 const service_uuid = GTFOG_UUID(1);
 bt_uuid_128 const fan_uuid = GTFOG_UUID(2);
 bt_uuid_128 const strobe_uuid = GTFOG_UUID(3);
-bt_uuid_128 const accel_uuid = GTFOG_UUID(4);
+bt_uuid_128 const accelerometer_uuid = GTFOG_UUID(4);
 bt_uuid_128 const charger_uuid = GTFOG_UUID(5);
 bt_uuid_128 const settings_uuid = GTFOG_UUID(6);
 bt_uuid_128 const effective_fan_uuid = GTFOG_UUID(7);
@@ -121,7 +121,7 @@ auto read_effective_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std:
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
-void accel_subscribed(bt_gatt_attr const *, std::uint16_t value) { accelerometer_stream(value == BT_GATT_CCC_NOTIFY); }
+void accelerometer_subscribed(bt_gatt_attr const *, std::uint16_t value) { accelerometer_stream(value == BT_GATT_CCC_NOTIFY); }
 
 constexpr auto rw_notify = BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY;
 constexpr auto encrypted = BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT;
@@ -133,8 +133,8 @@ BT_GATT_SERVICE_DEFINE(gtfog_service, BT_GATT_PRIMARY_SERVICE(&service_uuid),
                        BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
                        BT_GATT_CHARACTERISTIC(&strobe_uuid.uuid, rw_notify, encrypted, read_strobe, write_strobe, nullptr),
                        BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-                       BT_GATT_CHARACTERISTIC(&accel_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, nullptr, nullptr, nullptr),
-                       BT_GATT_CCC(accel_subscribed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
+                       BT_GATT_CHARACTERISTIC(&accelerometer_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, nullptr, nullptr, nullptr),
+                       BT_GATT_CCC(accelerometer_subscribed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
                        BT_GATT_CHARACTERISTIC(&charger_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ_ENCRYPT, read_charger,
                                               nullptr, nullptr),
                        BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
@@ -151,7 +151,7 @@ namespace {
 // Attribute indices in gtfog_service: 0 service, 1 + 3k characteristic declaration, 2 + 3k value, 3 + 3k CCC.
 constexpr auto fan_value = 2;
 constexpr auto strobe_value = 5;
-constexpr auto accel_value = 8;
+constexpr auto accelerometer_value = 8;
 constexpr auto charger_value = 11;
 constexpr auto settings_value = 14;
 constexpr auto effective_fan_value = 17;
@@ -336,11 +336,11 @@ void ble_charger_changed(gtfog::charger_state state) {
   }
 }
 
-auto ble_accel_samples_per_packet() -> std::size_t {
-  return gtfog::accel_samples_per_packet(att_mtu); // 0 without a connection.
+auto ble_accelerometer_samples_per_packet() -> std::size_t {
+  return gtfog::accelerometer_samples_per_packet(att_mtu); // 0 without a connection.
 }
 
-void ble_accel_send(std::span<std::uint8_t const> packet) {
+void ble_accelerometer_send(std::span<std::uint8_t const> packet) {
   // A full buffer drops the packet; the sequence number shows the gap to the phone.
-  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[accel_value], packet.data(), static_cast<std::uint16_t>(packet.size()));
+  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[accelerometer_value], packet.data(), static_cast<std::uint16_t>(packet.size()));
 }

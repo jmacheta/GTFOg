@@ -1,4 +1,4 @@
-#include "battery.hpp"
+#include "battery_model.hpp"
 
 #include <array>
 #include <utility>

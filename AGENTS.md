@@ -10,10 +10,11 @@ user-facing model.
 | --- | --- |
 | `hardware/` | Altium Designer project Rev 1.0 (`*.SchDoc`, `PCB.PcbDoc`, harnesses, BoM, Gerbers, 3D model); binary, not readable as text |
 | `software/boards/arm/gtfog/` | Board definition: `gtfog.dts`, `gtfog-pinctrl.dtsi` (source of truth for pins), `gtfog_defconfig`, `board.yml` |
-| `software/firmware/src/logic/` | Pure C++ logic without Zephyr: gestures, battery, accelerometer packing, controller; `CMakeLists.txt` lists the files by hand |
-| `software/firmware/src/` | Board layer, one `.cpp` per module (`board`, `buttons`, `battery`, `ble`, `accelerometer`, `main`), `app.hpp`; `CMakeLists.txt` lists them by hand |
+| `software/firmware/src/include/` | All headers: `gestures`, `battery_model`, `motion`, `controller` (pure logic) and `app.hpp` (board layer) |
+| `software/firmware/src/` | Pure logic without Zephyr (`gestures`, `battery_model`, `motion`, `controller`, the Boost.SML state machine; listed in `logic.cmake`) and the board layer (`board`, `buttons`, `battery`, `ble`, `accelerometer`, `main`; listed in `CMakeLists.txt`) |
+| `software/firmware/cmake/sml.cmake` | Fetches Boost.SML (pinned URL and SHA256) for the app and the tests |
 | `software/android/` | Android app; see [doc/android.md](doc/android.md) |
-| `software/firmware/tests/logic/` | Ztest suites of `src/logic`, run on `native_sim` |
+| `software/firmware/tests/logic/` | Ztest suites of the pure logic, run on `native_sim` |
 | `software/firmware/prj.conf`, `sysbuild.conf`, `sysbuild/mcuboot.conf` | Kconfig of the app, of sysbuild and of MCUboot |
 | `west.yml`, `zephyr/module.yml` | West manifest (NCS v3.4.0) and the module file that sets `board_root` |
 | `.github/workflows/` | CI: firmware build, tests, clang-format check |
@@ -32,7 +33,7 @@ west twister --testsuite-root GTFOg/software/firmware/tests --platform native_si
 
 From an NCS install, run twister with the path to `software/firmware/tests`.
 
-- Behavior goes into `src/logic` with a test; board files stay thin.
+- Behavior goes into the pure logic (`controller.hpp` table for device behavior) with a test; board files stay thin.
 - Hardware behavior cannot be checked without a board: say so instead of claiming it works.
 
 ## Before finishing

@@ -3,5 +3,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(gtfog_logic_tests LANGUAGES C CXX)
 
-target_sources(app PRIVATE src/test_accel.cpp src/test_battery.cpp src/test_buttons.cpp src/test_controller.cpp)
-add_subdirectory(../../src/logic logic)
+include(${CMAKE_CURRENT_LIST_DIR}/../../src/logic.cmake)
+
+target_sources(app PRIVATE src/test_battery_model.cpp src/test_controller.cpp src/test_controller_machine.cpp src/test_gestures.cpp src/test_motion.cpp)
+gtfog_add_logic(app)

@@ -5,7 +5,7 @@
 namespace gtfog {
 
 namespace {
-constexpr std::chrono::minutes locked_auto_off{1};
+constexpr std::chrono::seconds locked_auto_off{std::chrono::minutes{1}};
 } // namespace
 
 auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size> {
@@ -44,13 +44,13 @@ auto decode_settings(std::span<std::uint8_t const> bytes, device_settings base) 
   return s;
 }
 
-void controller::indicate(signal s) {
+void controller_data::indicate(signal s) {
   if(!config.stealth) {
     out.show(s);
   }
 }
 
-void controller::power_on() {
+void controller_data::start() {
   indicate(signal::power_on);
   fan = 0;
   level = activity_level::still;
@@ -58,62 +58,29 @@ void controller::power_on() {
   set_strobe(false);
 }
 
-void controller::check_start(battery_status status) {
-  if(!battery_allows_start(status)) {
-    power_off(signal::low_battery);
-  }
-}
-
-void controller::sensor_lost() {
+void controller_data::lose_sensor() {
   level = activity_level::still;
   rising_s = falling_s = 0;
   apply_fan(); // Also tells the phone about the level.
   indicate(signal::fault);
 }
 
-void controller::handle(button_event event) {
-  idle = 0s;
-  if(config.transport_lock && event.action != button_action::power_off && event.action != button_action::unlock) {
-    if(!event.repeat) {
-      indicate(signal::locked);
-    }
-    return;
-  }
-  switch(event.action) {
-  case button_action::plus:
-    change_fan_speed(static_cast<int>(event.steps * config.fan_step));
-    break;
-  case button_action::minus:
-    change_fan_speed(-static_cast<int>(event.steps * config.fan_step));
-    break;
-  case button_action::toggle_strobe:
-    set_strobe(!strobe_on);
-    break;
-  case button_action::power_off:
-    power_off(signal::power_off);
-    break;
-  case button_action::unlock:
-    if(config.transport_lock) {
-      config.transport_lock = false;
-      apply_fan();
-      apply_strobe();
-      out.settings_changed(config);
-      indicate(signal::unlocked);
-    } else {
-      change_fan_speed(config.fan_step);
-    }
-    break;
-  }
+void controller_data::lift_lock() {
+  config.transport_lock = false;
+  apply_fan();
+  apply_strobe();
+  out.settings_changed(config);
+  indicate(signal::unlocked);
 }
 
-void controller::change_fan_speed(int delta) {
+void controller_data::change_fan_speed(int delta) {
   int wanted = static_cast<int>(target_fan()) + delta;
   set_fan_speed(static_cast<unsigned>(std::clamp(wanted, 0, 100)));
   bool at_limit = wanted <= 0 || wanted >= 100;
   indicate(at_limit ? signal::speed_limit : (delta > 0 ? signal::speed_up : signal::speed_down));
 }
 
-void controller::set_fan_speed(unsigned percent) {
+void controller_data::set_fan_speed(unsigned percent) {
   percent = std::min(percent, 100u);
   if(config.mode == fan_mode::motion) {
     config.motion_speed[static_cast<unsigned>(level)] = static_cast<std::uint8_t>(percent);
@@ -124,21 +91,22 @@ void controller::set_fan_speed(unsigned percent) {
   apply_fan();
 }
 
-void controller::update_settings(device_settings written) {
-  if(written.mode != config.mode) {
+void controller_data::store_settings(device_settings const &value, bool user_written) {
+  if(!user_written) {
+    config = value;
+    return;
+  }
+  if(value.mode != config.mode) {
     level = activity_level::still;
     rising_s = falling_s = 0;
   }
-  config = written;
+  config = value;
   apply_fan();
   apply_strobe(); // Turning the lock on stops them.
   out.settings_changed(config);
 }
 
-void controller::observe(activity_level raw) {
-  if(config.mode != fan_mode::motion) {
-    return;
-  }
+void controller_data::track_activity(activity_level raw) {
   auto before = level;
   if(raw > level) {
     rising_to = rising_s++ == 0 ? raw : std::min(rising_to, raw);
@@ -160,41 +128,28 @@ void controller::observe(activity_level raw) {
   }
 }
 
-void controller::set_strobe(bool on) {
+void controller_data::set_strobe(bool on) {
   strobe_on = on;
   apply_strobe();
 }
 
-void controller::handle(battery_status status) {
+auto controller_data::record_battery(battery_status status) -> bool {
   battery = battery_percentage(status.millivolts);
-  if(guard.update(status)) {
-    power_off(signal::low_battery);
-    return;
-  }
-  if(battery > 15) {
-    battery_warned = false;
-  } else if(battery <= 10 && !battery_warned) {
-    battery_warned = true;
-    indicate(signal::battery_warning);
-  }
+  return guard.update(status);
 }
 
-void controller::elapsed(std::chrono::seconds passed, bool phone_connected) {
+auto controller_data::in_use(bool phone_connected) const noexcept -> bool {
   // In motion mode the fan always runs at some speed, so only movement counts as use.
   bool fan_in_use = config.mode == fan_mode::motion ? level != activity_level::still && !config.transport_lock : fan_speed() != 0;
-  if(fan_in_use || strobe() || phone_connected) {
-    idle = 0s;
-    return;
-  }
-  idle += passed;
-  // A locked device that is woken by accident (in a bag) must not idle until the cell is empty.
-  auto limit = config.transport_lock ? locked_auto_off : std::chrono::minutes{config.auto_off_minutes};
-  if(limit != 0min && idle >= limit) {
-    power_off(signal::power_off);
-  }
+  return fan_in_use || strobe() || phone_connected;
 }
 
-void controller::power_off(signal s) {
+auto controller_data::idle_limit() const noexcept -> std::chrono::seconds {
+  // A locked device that is woken by accident (in a bag) must not idle until the cell is empty.
+  return config.transport_lock ? locked_auto_off : std::chrono::minutes{config.auto_off_minutes};
+}
+
+void controller_data::shut_down(signal s) {
   set_strobe(false);
   fan = 0;
   out.set_fan(0);

@@ -31,8 +31,8 @@ Images land in `build/` (the application under `build/firmware/`, MCUboot under 
 
 ## Tests
 
-Ztest suites in `software/firmware/tests/logic` (`accel`, `battery`, `buttons`, `controller`) cover `src/logic`; the test
-`CMakeLists.txt` compiles that directory directly. They run on the host with twister:
+Ztest suites in `software/firmware/tests/logic` (`motion`, `battery_model`, `gestures`, `controller`, `controller_machine`) cover the pure logic; the test
+`CMakeLists.txt` includes `src/logic.cmake`, the same list the application uses. They run on the host with twister:
 
 ```sh
 west twister --testsuite-root GTFOg/software/firmware/tests --platform native_sim/native/64
@@ -57,9 +57,12 @@ by `smpmgr image state-read`.
 
 ## CMake and Kconfig
 
-- `software/firmware/CMakeLists.txt` finds Zephyr and adds `src/`; `src/CMakeLists.txt` lists the board sources and adds
-  `src/logic/`. New sources are added by hand.
-- No third-party libraries are fetched.
+- `software/firmware/CMakeLists.txt` finds Zephyr and adds `src/`; `src/CMakeLists.txt` lists the board sources and includes
+  `src/logic.cmake`, which lists the pure logic sources once (`gtfog_add_logic`) for the application and the tests. New
+  sources are added by hand.
+- Boost.SML (header only, v1.1.11) is the one third-party library: `cmake/sml.cmake` fetches it with `FetchContent` from a
+  pinned GitHub URL with a `URL_HASH`, so the first configure needs network access. It builds with `-fno-exceptions
+  -fno-rtti` (SML detects both) and is included as a system header.
 - App options are in `prj.conf` (C++23, full libc++, no exceptions or RTTI, logging off (RTT backend to be enabled for
   debugging), PWM, I2C, ADC, NVS and settings, Bluetooth peripheral with SMP, BAS and DIS, one connection, MTU 247,
   mcumgr over Bluetooth into slot 1). No sensor driver: the ADXL345 uses raw I2C.

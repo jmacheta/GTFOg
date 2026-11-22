@@ -32,8 +32,8 @@ void app_settings_load();
 void ble_state_changed(); // Notifies the fan speed and strobe state to a connected phone.
 void ble_battery_changed(std::uint8_t percent);
 void ble_charger_changed(gtfog::charger_state state);
-[[nodiscard]] auto ble_accel_samples_per_packet() -> std::size_t; // 0 when nobody is connected.
-void ble_accel_send(std::span<std::uint8_t const> packet);
+[[nodiscard]] auto ble_accelerometer_samples_per_packet() -> std::size_t; // 0 when nobody is connected.
+void ble_accelerometer_send(std::span<std::uint8_t const> packet);
 
 void ble_settings_changed(gtfog::device_settings const &settings); // Notifies the phone and stores them in flash after 2 s; does not block.
 void ble_settings_flush();                                         // Stores them now, in the calling thread (before System OFF).

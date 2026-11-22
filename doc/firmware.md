@@ -6,20 +6,20 @@ Everything below describes the code as it is; unclear points are in [Open questi
 
 ## Modules
 
-Pure logic, no Zephyr includes (`src/logic/`, tested on the host):
+Pure logic, no Zephyr includes (headers in `src/include/`, sources in `src/`, tested on the host; Boost.SML is fetched at configure time):
 
 | File | Contents |
 | --- | --- |
-| `buttons.hpp/.cpp` | `button_gestures`: turns sampled button levels and time into `button_event`s (including the unlock gesture); `button_timing` holds the thresholds |
-| `battery.hpp/.cpp` | `decode_charger_state`, `battery_percentage` (Li-ion curve), `battery_guard` (low-battery cutoff) |
-| `accel.hpp/.cpp` | `pack_accel`: accelerometer stream packet; `counts_to_milli_g`, `accel_samples_per_packet`; `activity_classifier` |
-| `controller.hpp/.cpp` | `controller`: fan speed, strobe, signals, power off; abstract `outputs`; `fan_duty_permille`, `pwm_pulse_ns` |
+| `gestures.hpp/.cpp` | `button_gestures`: turns sampled button levels and time into `button_event`s (including the unlock gesture); `button_timing` holds the thresholds |
+| `battery_model.hpp/.cpp` | `decode_charger_state`, `battery_percentage` (Li-ion curve), `battery_guard` (low-battery cutoff) |
+| `motion.hpp/.cpp` | `pack_accelerometer_samples`: accelerometer stream packet; `counts_to_milli_g`, `accelerometer_samples_per_packet`; `activity_classifier`; `fifo_watchdog` |
+| `controller.hpp/.cpp` | `controller_table`: the Boost.SML transition table; `controller_data` (the steps it calls); `controller`, the wrapper that turns calls into events; abstract `outputs`; settings encoding; `fan_duty_permille`, `pwm_pulse_ns` |
 
 Board layer (`src/`):
 
 | File | Contents |
 | --- | --- |
-| `app.hpp` | `with_controller(f)`: runs `f(controller &)` under a mutex; declarations shared by the board files |
+| `include/app.hpp` | `with_controller(f)`: runs `f(controller &)` under a mutex; declarations shared by the board files |
 | `board.cpp` | `board_outputs` (implements `outputs`): PWM fan, PWM strobe and RGB LED patterns (`k_work`), System OFF; owns the `controller` |
 | `buttons.cpp` | Button GPIO interrupts, `buttons` thread feeding `button_gestures`, wake-up arming |
 | `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog; `battery_sample()` for the boot check |
@@ -41,7 +41,7 @@ The strobe, the LED patterns, BLE notifications, saving the settings and the adv
 
 ## Controller
 
-`controller` (`src/logic/controller.cpp`) holds the target fan speed (0..100 %, what the user set and BLE reads), the strobe state, the battery percentage and
+`controller` (`src/include/controller.hpp`, `src/controller.cpp`) is a Boost.SML state machine: every input below is an event of `controller_table` (`events::button`, `events::battery_sample`, `events::elapsed` and so on), processed under the controller mutex. The table has three orthogonal regions that each see every event: power (`running`, `powered_off`; the first matching row wins), transport lock (`unlocked`, `locked`) and fan mode (`manual`, `motion`). The lock and mode states follow `device_settings` (loaded, written over Bluetooth, or the unlock gesture). After `powered_off` the power region ignores everything (the other two regions only track the lock and the mode); on the board `outputs::power_off()` does not return anyway. It holds the target fan speed (0..100 %, what the user set and BLE reads), the strobe state, the battery percentage and
 the `device_settings`, and drives an `outputs` object. Signals go to `outputs::show()` only when stealth mode is off. Stealth is strict: it also hides `low_battery`, `battery_warning` and `fault`, so the fan simply stops at the battery cutoff; the phone shows the battery level, the charger state and the fan state.
 
 | Input | Effect |
@@ -102,7 +102,7 @@ target and ignores the activity; switching mode resets the level to still. If th
 ## Buttons
 
 Two active-low buttons with pull-ups: minus and plus. A GPIO edge wakes the `buttons` thread; while a button is down it
-re-evaluates every 20 ms. Thresholds are `button_timing` defaults in `buttons.hpp`.
+re-evaluates every 20 ms. Thresholds are `button_timing` defaults in `gestures.hpp`.
 
 | Gesture | Result |
 | --- | --- |
@@ -203,8 +203,8 @@ Faults: a poll that fails or finds the FIFO empty counts as unhealthy (`fifo_wat
 The thread owns the power pin: `accelerometer_power_off()` sets a shutdown flag, wakes the thread and waits at most 1 s for it to
 drive the pin low, then drives it low itself.
 
-Notification frame (little endian, `pack_accel`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
-then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accel_samples_per_packet`). A full
+Notification frame (little endian, `pack_accelerometer_samples`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
+then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accelerometer_samples_per_packet`). A full
 controller buffer drops a packet; a gap in `seq` shows it. Checked ad hoc on a board: about 100 Hz, no gaps; this is not
 in `ble_test.py`.
 

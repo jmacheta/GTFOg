@@ -1,4 +1,4 @@
-#include "buttons.hpp"
+#include "gestures.hpp"
 
 #include <zephyr/ztest.h>
 
@@ -23,9 +23,9 @@ auto run(button_gestures &g, bool plus, bool minus, std::chrono::milliseconds fr
 
 } // namespace
 
-ZTEST_SUITE(buttons, nullptr, nullptr, nullptr, nullptr, nullptr);
+ZTEST_SUITE(gestures, nullptr, nullptr, nullptr, nullptr, nullptr);
 
-ZTEST(buttons, test_short_press_fires_on_release) {
+ZTEST(gestures, test_short_press_fires_on_release) {
   button_gestures g;
   zassert_true(run(g, true, false, 0ms, 100ms).empty());
   auto released = g.update(false, false, 120ms);
@@ -33,13 +33,13 @@ ZTEST(buttons, test_short_press_fires_on_release) {
   zassert_true(g.is_idle());
 }
 
-ZTEST(buttons, test_bounce_is_ignored) {
+ZTEST(gestures, test_bounce_is_ignored) {
   button_gestures g;
   zassert_false(g.update(false, true, 0ms).has_value());
   zassert_false(g.update(false, false, 20ms).has_value());
 }
 
-ZTEST(buttons, test_long_press_repeats_and_accelerates) {
+ZTEST(gestures, test_long_press_repeats_and_accelerates) {
   button_gestures g;
   auto events = run(g, false, true, 0ms, 7000ms);
   zassert_false(events.empty());
@@ -50,19 +50,19 @@ ZTEST(buttons, test_long_press_repeats_and_accelerates) {
   zassert_false(g.update(false, false, 7020ms).has_value(), "a long press must not also fire on release");
 }
 
-ZTEST(buttons, test_steps_are_capped) {
+ZTEST(gestures, test_steps_are_capped) {
   button_gestures g;
   auto events = run(g, true, false, 0ms, 20s);
   zassert_equal(events.back().steps, button_timing{}.max_steps);
 }
 
-ZTEST(buttons, test_stuck_button_goes_quiet) {
+ZTEST(gestures, test_stuck_button_goes_quiet) {
   button_gestures g;
   std::ignore = run(g, true, false, 0ms, 30s);
   zassert_true(run(g, true, false, 30020ms, 40s).empty());
 }
 
-ZTEST(buttons, test_chord_released_between_2_and_5_s_toggles_strobe) {
+ZTEST(gestures, test_chord_released_between_2_and_5_s_toggles_strobe) {
   button_gestures g;
   zassert_true(run(g, true, true, 0ms, 3s).empty());
   auto released = g.update(false, false, 3020ms);
@@ -70,7 +70,7 @@ ZTEST(buttons, test_chord_released_between_2_and_5_s_toggles_strobe) {
   zassert_false(g.update(false, false, 3040ms).has_value());
 }
 
-ZTEST(buttons, test_chord_toggles_strobe_when_one_button_is_let_go) {
+ZTEST(gestures, test_chord_toggles_strobe_when_one_button_is_let_go) {
   button_gestures g;
   std::ignore = run(g, true, true, 0ms, 2500ms);
   auto released = g.update(true, false, 2520ms);
@@ -80,7 +80,7 @@ ZTEST(buttons, test_chord_toggles_strobe_when_one_button_is_let_go) {
   zassert_true(g.is_idle());
 }
 
-ZTEST(buttons, test_chord_held_to_5_s_powers_off_without_strobe) {
+ZTEST(gestures, test_chord_held_to_5_s_powers_off_without_strobe) {
   button_gestures g;
   auto events = run(g, true, true, 0ms, 6s);
   zassert_equal(events.size(), 1);
@@ -88,7 +88,7 @@ ZTEST(buttons, test_chord_held_to_5_s_powers_off_without_strobe) {
   zassert_false(g.update(false, false, 6020ms).has_value());
 }
 
-ZTEST(buttons, test_chord_released_before_2_s_fires_nothing) {
+ZTEST(gestures, test_chord_released_before_2_s_fires_nothing) {
   button_gestures g;
   std::ignore = run(g, true, true, 0ms, 1000ms);
   zassert_false(g.update(true, false, 1020ms).has_value());
@@ -102,7 +102,7 @@ auto tap(button_gestures &g, std::chrono::milliseconds at) -> std::optional<butt
   return g.update(false, false, at + 100ms);
 }
 
-ZTEST(buttons, test_third_quick_plus_press_unlocks) {
+ZTEST(gestures, test_third_quick_plus_press_unlocks) {
   button_gestures g;
   zassert_true((tap(g, 0ms) == button_event{button_action::plus}));
   zassert_true((tap(g, 400ms) == button_event{button_action::plus}));
@@ -110,14 +110,14 @@ ZTEST(buttons, test_third_quick_plus_press_unlocks) {
   zassert_true((tap(g, 1200ms) == button_event{button_action::plus}), "the count starts over");
 }
 
-ZTEST(buttons, test_slow_plus_presses_do_not_unlock) {
+ZTEST(gestures, test_slow_plus_presses_do_not_unlock) {
   button_gestures g;
   for(auto at = 0ms; at < 6s; at += 1500ms) {
     zassert_true((tap(g, at) == button_event{button_action::plus}));
   }
 }
 
-ZTEST(buttons, test_long_press_does_not_count_for_unlock) {
+ZTEST(gestures, test_long_press_does_not_count_for_unlock) {
   button_gestures g;
   zassert_true((tap(g, 0ms) == button_event{button_action::plus}));
   zassert_true(run(g, true, false, 400ms, 1000ms).size() > 0);
@@ -125,7 +125,7 @@ ZTEST(buttons, test_long_press_does_not_count_for_unlock) {
   zassert_true((tap(g, 1200ms) == button_event{button_action::plus}));
 }
 
-ZTEST(buttons, test_release_between_long_press_and_first_repeat_is_one_step) {
+ZTEST(gestures, test_release_between_long_press_and_first_repeat_is_one_step) {
   button_gestures g;
   std::ignore = g.update(true, false, 0ms);
   zassert_false(g.update(true, false, 490ms).has_value());
@@ -138,7 +138,7 @@ ZTEST(buttons, test_release_between_long_press_and_first_repeat_is_one_step) {
   zassert_false(h.update(false, false, 530ms).has_value());
 }
 
-ZTEST(buttons, test_press_held_since_boot_is_ignored_until_released) {
+ZTEST(gestures, test_press_held_since_boot_is_ignored_until_released) {
   button_gestures g;
   g.wait_for_release();
   zassert_true(run(g, true, false, 0ms, 3s).empty());
@@ -146,7 +146,7 @@ ZTEST(buttons, test_press_held_since_boot_is_ignored_until_released) {
   zassert_true((tap(g, 4s) == button_event{button_action::plus}));
 }
 
-ZTEST(buttons, test_stuck_button_lets_the_thread_sleep) {
+ZTEST(gestures, test_stuck_button_lets_the_thread_sleep) {
   button_gestures g;
   std::ignore = run(g, true, false, 0ms, 29s);
   zassert_false(g.is_idle());
@@ -155,7 +155,7 @@ ZTEST(buttons, test_stuck_button_lets_the_thread_sleep) {
   zassert_false(g.update(false, false, 40s).has_value());
 }
 
-ZTEST(buttons, test_stuck_button_then_chord_still_powers_off) {
+ZTEST(gestures, test_stuck_button_then_chord_still_powers_off) {
   button_gestures g;
   std::ignore = run(g, true, false, 0ms, 31s);
   zassert_true(g.is_idle());
@@ -164,7 +164,7 @@ ZTEST(buttons, test_stuck_button_then_chord_still_powers_off) {
   zassert_true((events[0] == button_event{button_action::power_off}));
 }
 
-ZTEST(buttons, test_second_button_during_repeat_starts_a_chord_and_stops_the_repeat) {
+ZTEST(gestures, test_second_button_during_repeat_starts_a_chord_and_stops_the_repeat) {
   button_gestures g;
   zassert_false(run(g, true, false, 0ms, 1000ms).empty());
   zassert_true(run(g, true, true, 1020ms, 3200ms).empty());
@@ -172,7 +172,7 @@ ZTEST(buttons, test_second_button_during_repeat_starts_a_chord_and_stops_the_rep
   zassert_true((released == button_event{button_action::toggle_strobe}));
 }
 
-ZTEST(buttons, test_both_held_since_boot_still_power_off) {
+ZTEST(gestures, test_both_held_since_boot_still_power_off) {
   button_gestures g;
   g.wait_for_release();
   auto events = run(g, true, true, 0ms, 6s);
@@ -180,7 +180,7 @@ ZTEST(buttons, test_both_held_since_boot_still_power_off) {
   zassert_true((events[0] == button_event{button_action::power_off}));
 }
 
-ZTEST(buttons, test_second_button_after_a_boot_press_starts_the_chord) {
+ZTEST(gestures, test_second_button_after_a_boot_press_starts_the_chord) {
   button_gestures g;
   g.wait_for_release();
   zassert_true(run(g, true, false, 0ms, 1s).empty());
@@ -189,7 +189,7 @@ ZTEST(buttons, test_second_button_after_a_boot_press_starts_the_chord) {
   zassert_true((events[0] == button_event{button_action::power_off}));
 }
 
-ZTEST(buttons, test_only_repeats_after_the_first_are_marked) {
+ZTEST(gestures, test_only_repeats_after_the_first_are_marked) {
   button_gestures g;
   auto events = run(g, true, false, 0ms, 2s);
   zassert_true(events.size() > 3);

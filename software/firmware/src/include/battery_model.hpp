@@ -1,5 +1,5 @@
-#ifndef GTFOG_LOGIC_BATTERY_HPP
-#define GTFOG_LOGIC_BATTERY_HPP
+#ifndef GTFOG_BATTERY_MODEL_HPP
+#define GTFOG_BATTERY_MODEL_HPP
 
 #include <cstdint>
 

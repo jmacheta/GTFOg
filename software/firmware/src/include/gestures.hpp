@@ -1,5 +1,5 @@
-#ifndef GTFOG_LOGIC_BUTTONS_HPP
-#define GTFOG_LOGIC_BUTTONS_HPP
+#ifndef GTFOG_GESTURES_HPP
+#define GTFOG_GESTURES_HPP
 
 #include <chrono>
 #include <optional>
