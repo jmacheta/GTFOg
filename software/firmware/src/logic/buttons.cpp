@@ -6,8 +6,16 @@
 namespace gtfog {
 
 auto button_gestures::update(bool plus_pressed, bool minus_pressed, std::chrono::milliseconds now) noexcept -> std::optional<button_event> {
+  if(waiting) {
+    if(plus_pressed || minus_pressed) {
+      return std::nullopt;
+    }
+    waiting = false;
+  }
+
   if(plus_pressed && minus_pressed && !chord) {
     chord = true;
+    plus.stuck = minus.stuck = false;
     chord_since = now;
     chord_done = false;
   }
@@ -43,15 +51,27 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
 
   auto held = now - b.pressed_at;
   if(!is_pressed) {
-    bool was_short = b.pressed && held >= timing.short_press && held < timing.long_press;
+    bool counted = b.pressed && held >= timing.short_press && held < timing.stuck;
+    bool repeated = b.next_repeat != b.pressed_at + timing.long_press;
     b.pressed = false;
-    if(!was_short) {
+    if(!counted) {
       return std::nullopt;
     }
-    return action == button_action::plus ? short_plus(now) : button_event{action};
+    if(held < timing.long_press) {
+      return action == button_action::plus ? short_plus(now) : button_event{action};
+    }
+    // Released after the long-press time but before the first repeat: one step.
+    return repeated ? std::nullopt : std::optional{button_event{action}};
   }
 
-  if(!b.pressed || held >= timing.stuck || now < b.next_repeat) {
+  if(!b.pressed || b.stuck) {
+    return std::nullopt;
+  }
+  if(held >= timing.stuck) {
+    b.stuck = true;
+    return std::nullopt;
+  }
+  if(now < b.next_repeat) {
     return std::nullopt;
   }
   b.next_repeat = now + timing.repeat_interval;

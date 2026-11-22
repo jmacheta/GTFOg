@@ -42,7 +42,7 @@ std::atomic<bt_conn *> current_conn{nullptr};
 std::atomic<std::uint16_t> att_mtu{0};
 
 auto read_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
-  auto value = with_controller([](gtfog::controller &c) { return static_cast<std::uint8_t>(c.fan_speed()); });
+  auto value = with_controller([](gtfog::controller &control) { return static_cast<std::uint8_t>(control.fan_speed()); });
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
@@ -54,12 +54,12 @@ auto write_fan(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t l
   if(!gtfog::is_fan_percent(value)) {
     return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
   }
-  with_controller([&](gtfog::controller &c) { c.set_fan_speed(value); });
+  with_controller([&](gtfog::controller &control) { control.set_fan_speed(value); });
   return len;
 }
 
 auto read_strobe(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
-  std::uint8_t value = with_controller([](gtfog::controller &c) { return c.strobe(); });
+  std::uint8_t value = with_controller([](gtfog::controller &control) { return control.strobe(); });
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
@@ -71,7 +71,7 @@ auto write_strobe(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_
   if(!gtfog::is_strobe_value(value)) {
     return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
   }
-  with_controller([&](gtfog::controller &c) { c.set_strobe(value != 0); });
+  with_controller([&](gtfog::controller &control) { control.set_strobe(value != 0); });
   return len;
 }
 
@@ -81,7 +81,7 @@ auto read_charger(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint1
 }
 
 auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
-  auto value = gtfog::encode(with_controller([](gtfog::controller &c) { return c.settings(); }));
+  auto value = gtfog::encode(with_controller([](gtfog::controller &control) { return control.settings(); }));
   return bt_gatt_attr_read(conn, attr, buf, len, offset, value.data(), value.size());
 }
 
@@ -90,7 +90,7 @@ auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint1
   if(offset != 0 || !settings) {
     return BT_GATT_ERR(gtfog::is_settings_size(len) ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
-  with_controller([&](gtfog::controller &c) { c.update_settings(*settings); }); // Calls ble_settings_changed().
+  with_controller([&](gtfog::controller &control) { control.update_settings(*settings); }); // Calls ble_settings_changed().
   return len;
 }
 
@@ -101,15 +101,16 @@ auto load_settings(char const *key, std::size_t len, settings_read_cb read, void
     return 0; // Unknown or damaged entries keep the defaults.
   }
   if(auto settings = gtfog::decode_settings({bytes.data(), len})) {
-    with_controller([&](gtfog::controller &c) { c.configure(*settings); });
+    with_controller([&](gtfog::controller &control) { control.configure(*settings); });
     last_saved = gtfog::encode(*settings);
   }
   return 0;
 }
 
 auto read_effective_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
-  auto value =
-      with_controller([](gtfog::controller &c) { return std::array<std::uint8_t, 2>{static_cast<std::uint8_t>(c.fan_speed()), c.activity_code()}; });
+  auto value = with_controller([](gtfog::controller &control) {
+    return std::array<std::uint8_t, 2>{static_cast<std::uint8_t>(control.fan_speed()), control.activity_code()};
+  });
   return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
 }
 
@@ -160,18 +161,23 @@ bt_data const scan_response[] = {
     {BT_DATA_NAME_COMPLETE, sizeof(CONFIG_BT_DEVICE_NAME) - 1, reinterpret_cast<std::uint8_t const *>(CONFIG_BT_DEVICE_NAME)},
 };
 
+void start_advertising(k_work *work);
+K_WORK_DELAYABLE_DEFINE(advertising_work, start_advertising);
+
+// A failed start is tried again every 5 s, so the device does not stay unreachable.
 void start_advertising(k_work *) {
   bt_le_adv_param param = BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN, BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, nullptr);
   if(int err = bt_le_adv_start(&param, advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
      err != 0 && err != -EALREADY) {
     LOG_ERR("advertising: %d", err);
+    k_work_reschedule(&advertising_work, K_SECONDS(5));
   }
 }
-K_WORK_DEFINE(advertising_work, start_advertising);
 
 void notify_state(k_work *) {
-  auto [fan, activity, strobe] = with_controller(
-      [](gtfog::controller &c) { return std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>(c.fan_speed(), c.activity_code(), c.strobe()); });
+  auto [fan, activity, strobe] = with_controller([](gtfog::controller &control) {
+    return std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>(control.fan_speed(), control.activity_code(), control.strobe());
+  });
   std::array<std::uint8_t, 2> const actual{fan, activity};
   // -ENOTCONN and friends only mean nobody listens.
   std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[fan_value], &fan, sizeof(fan));
@@ -214,7 +220,7 @@ K_WORK_DEFINE(notify_settings_work, notify_settings);
 
 // Remembers that a refused pairing needs a status LED signal; the work takes the controller mutex, the Bluetooth callback must not.
 void report_pairing_refused(k_work *) {
-  with_controller([](gtfog::controller &c) { c.report(gtfog::signal::pairing_refused); });
+  with_controller([](gtfog::controller &control) { control.report(gtfog::signal::pairing_refused); });
 }
 K_WORK_DEFINE(pairing_refused_work, report_pairing_refused);
 
@@ -252,7 +258,7 @@ void disconnected(bt_conn *conn, std::uint8_t reason) {
   }
 }
 
-void recycled() { k_work_submit(&advertising_work); }
+void recycled() { k_work_reschedule(&advertising_work, K_NO_WAIT); }
 
 } // namespace
 
@@ -283,7 +289,7 @@ auto ble_init() -> int {
   if(int err = settings_load_subtree("bt"); err != 0) { // Bonds; the "gtfog" subtree was loaded by app_settings_load().
     LOG_WRN("bt settings: %d", err);
   }
-  k_work_submit(&advertising_work);
+  k_work_reschedule(&advertising_work, K_NO_WAIT);
   return 0;
 }
 

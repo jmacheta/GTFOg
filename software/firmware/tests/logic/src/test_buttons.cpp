@@ -124,3 +124,50 @@ ZTEST(buttons, test_long_press_does_not_count_for_unlock) {
   std::ignore = g.update(false, false, 1020ms);
   zassert_true((tap(g, 1200ms) == button_event{button_action::plus}));
 }
+
+ZTEST(buttons, test_release_between_long_press_and_first_repeat_is_one_step) {
+  button_gestures g;
+  std::ignore = g.update(true, false, 0ms);
+  zassert_false(g.update(true, false, 490ms).has_value());
+  zassert_true((g.update(false, false, 505ms) == button_event{button_action::plus, 1}));
+  zassert_false(g.update(false, false, 520ms).has_value());
+  // After a repeat has fired, the release adds nothing.
+  button_gestures h;
+  auto events = run(h, false, true, 0ms, 520ms);
+  zassert_equal(events.size(), 1);
+  zassert_false(h.update(false, false, 530ms).has_value());
+}
+
+ZTEST(buttons, test_press_held_since_boot_is_ignored_until_released) {
+  button_gestures g;
+  g.wait_for_release();
+  zassert_true(run(g, true, false, 0ms, 3s).empty());
+  zassert_false(g.update(false, false, 3020ms).has_value(), "the release is no short press");
+  zassert_true((tap(g, 4s) == button_event{button_action::plus}));
+}
+
+ZTEST(buttons, test_stuck_button_lets_the_thread_sleep) {
+  button_gestures g;
+  std::ignore = run(g, true, false, 0ms, 29s);
+  zassert_false(g.is_idle());
+  std::ignore = run(g, true, false, 29020ms, 30100ms);
+  zassert_true(g.is_idle());
+  zassert_false(g.update(false, false, 40s).has_value());
+}
+
+ZTEST(buttons, test_stuck_button_then_chord_still_powers_off) {
+  button_gestures g;
+  std::ignore = run(g, true, false, 0ms, 31s);
+  zassert_true(g.is_idle());
+  auto events = run(g, true, true, 31020ms, 37s);
+  zassert_equal(events.size(), 1);
+  zassert_true((events[0] == button_event{button_action::power_off}));
+}
+
+ZTEST(buttons, test_second_button_during_repeat_starts_a_chord_and_stops_the_repeat) {
+  button_gestures g;
+  zassert_false(run(g, true, false, 0ms, 1000ms).empty());
+  zassert_true(run(g, true, true, 1020ms, 3200ms).empty());
+  auto released = g.update(false, false, 3220ms);
+  zassert_true((released == button_event{button_action::toggle_strobe}));
+}

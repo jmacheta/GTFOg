@@ -38,7 +38,7 @@ auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optio
 }
 
 void controller::indicate(signal s) {
-  if(!cfg.stealth) {
+  if(!config.stealth) {
     out.show(s);
   }
 }
@@ -66,16 +66,16 @@ void controller::sensor_lost() {
 
 void controller::handle(button_event event) {
   idle_seconds = 0;
-  if(cfg.transport_lock && event.action != button_action::power_off && event.action != button_action::unlock) {
+  if(config.transport_lock && event.action != button_action::power_off && event.action != button_action::unlock) {
     indicate(signal::locked);
     return;
   }
   switch(event.action) {
   case button_action::plus:
-    change_fan_speed(static_cast<int>(event.steps * cfg.fan_step));
+    change_fan_speed(static_cast<int>(event.steps * config.fan_step));
     break;
   case button_action::minus:
-    change_fan_speed(-static_cast<int>(event.steps * cfg.fan_step));
+    change_fan_speed(-static_cast<int>(event.steps * config.fan_step));
     break;
   case button_action::toggle_strobe:
     set_strobe(!strobe_on);
@@ -84,14 +84,14 @@ void controller::handle(button_event event) {
     power_off(signal::power_off);
     break;
   case button_action::unlock:
-    if(cfg.transport_lock) {
-      cfg.transport_lock = false;
+    if(config.transport_lock) {
+      config.transport_lock = false;
       apply_fan();
       apply_strobe();
-      out.settings_changed(cfg);
+      out.settings_changed(config);
       indicate(signal::unlocked);
     } else {
-      change_fan_speed(cfg.fan_step);
+      change_fan_speed(config.fan_step);
     }
     break;
   }
@@ -106,42 +106,42 @@ void controller::change_fan_speed(int delta) {
 
 void controller::set_fan_speed(unsigned percent) {
   percent = std::min(percent, 100u);
-  if(cfg.mode == fan_mode::motion) {
-    cfg.motion_speed[static_cast<unsigned>(level)] = static_cast<std::uint8_t>(percent);
-    out.settings_changed(cfg);
+  if(config.mode == fan_mode::motion) {
+    config.motion_speed[static_cast<unsigned>(level)] = static_cast<std::uint8_t>(percent);
+    out.settings_changed(config);
   } else {
     fan = percent;
   }
   apply_fan();
 }
 
-void controller::update_settings(device_settings s) {
-  if(s.mode != cfg.mode) {
+void controller::update_settings(device_settings written) {
+  if(written.mode != config.mode) {
     level = activity_level::still;
     rising_s = falling_s = 0;
   }
-  cfg = s;
+  config = written;
   apply_fan();
   apply_strobe(); // Turning the lock on stops them.
-  out.settings_changed(cfg);
+  out.settings_changed(config);
 }
 
 void controller::observe(activity_level raw) {
-  if(cfg.mode != fan_mode::motion) {
+  if(config.mode != fan_mode::motion) {
     return;
   }
   auto before = level;
   if(raw > level) {
     rising_to = rising_s++ == 0 ? raw : std::min(rising_to, raw);
     falling_s = 0;
-    if(rising_s >= 2) { // ponytail: 2 s up, cfg.motion_delay_s down; tune with the thresholds.
+    if(rising_s >= 2) { // ponytail: 2 s up, config.motion_delay_s down; tune with the thresholds.
       level = rising_to;
       rising_s = 0;
     }
   } else {
     rising_s = 0;
     falling_s = raw < level ? falling_s + 1 : 0;
-    if(falling_s >= cfg.motion_delay_s) {
+    if(falling_s >= config.motion_delay_s) {
       level = raw;
       falling_s = 0;
     }
@@ -172,13 +172,13 @@ void controller::handle(battery_status status) {
 
 void controller::elapsed(unsigned seconds, bool phone_connected) {
   // In motion mode the fan always runs at some speed, so only movement counts as use.
-  bool fan_in_use = cfg.mode == fan_mode::motion ? level != activity_level::still && !cfg.transport_lock : fan_speed() != 0;
+  bool fan_in_use = config.mode == fan_mode::motion ? level != activity_level::still && !config.transport_lock : fan_speed() != 0;
   if(fan_in_use || strobe() || phone_connected) {
     idle_seconds = 0;
     return;
   }
   idle_seconds += seconds;
-  if(cfg.auto_off_minutes != 0 && idle_seconds >= cfg.auto_off_minutes * 60U) {
+  if(config.auto_off_minutes != 0 && idle_seconds >= config.auto_off_minutes * 60U) {
     power_off(signal::power_off);
   }
 }

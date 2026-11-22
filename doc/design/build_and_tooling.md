@@ -75,7 +75,7 @@ west build -b gtfog GTFOg/software/firmware -p -- -DSB_CONFIG_BOOT_SIGNATURE_KEY
 ```
 
 The bootloader carries the public half of the key, so every board needs the new MCUboot flashed over SWD once (`west flash`);
-after that, updates over Bluetooth must be signed with the same key. Pairing is Just Works in the first 3 minutes after a wake, so
+after that, updates over Bluetooth must be signed with the same key. Pairing is Just Works (LE Secure Connections only) in the first 3 minutes after a wake, so
 the key is the only protection of the update path: keep it private.
 
 ## Formatting

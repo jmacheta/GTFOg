@@ -5,58 +5,61 @@
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 
+#include <cstdint>
+
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 int main() {
-  // The settings first (stealth decides whether the LED lights up), without Bluetooth.
+  // The settings first (stealth decides whether the LED lights up).
   app_settings_load();
-  // A cell that only recovered above the cutoff at rest must not run the fan again: power off before anything starts.
-  if(auto sample = battery_sample()) {
-    with_controller([&](gtfog::controller &c) { c.check_start(*sample); }); // Does not return when the battery is low.
-  }
   int ble_err = ble_init();
   if(ble_err != 0) {
     LOG_ERR("Bluetooth: %d", ble_err);
   }
-  accelerometer_motion_mode(with_controller([](gtfog::controller &c) {
-    c.power_on();
-    return c.settings().follows_motion();
-  }));
   // A new image runs on trial after an update. It confirms itself only when Bluetooth works, the update path for the
-  // next fix; otherwise MCUboot reverts it on the next reset.
+  // next fix; otherwise MCUboot reverts it on the next reset. This comes before the battery check, which may power off.
   if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
     LOG_ERR("cannot confirm the image");
   }
+  // A cell that only recovered above the cutoff at rest must not run the fan again: power off before it starts.
+  if(auto sample = battery_sample()) {
+    with_controller([&](gtfog::controller &control) { control.check_start(*sample); }); // Does not return when the battery is low.
+  }
+  accelerometer_motion_mode(with_controller([](gtfog::controller &control) {
+    control.power_on();
+    return control.settings().follows_motion();
+  }));
   LOG_INF("started");
   return 0;
 }
 
+namespace {
+
 // The nRF52833 runs from VDDH (high voltage mode); its regulator must give 3.3 V to the GPIOs. Writing UICR needs a
 // reset, so this happens once, on the first boot of a new chip.
-static int set_gpio_voltage(void) {
+auto set_gpio_voltage() -> int {
   if(nrf_power_mainregstatus_get(NRF_POWER) != NRF_POWER_MAINREGSTATUS_HIGH) {
-    // Low power supply mode, do nothing
-    return 0;
+    return 0; // Normal voltage mode.
   }
   bool supply_is_3v3 = (NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) == (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos);
   if(supply_is_3v3) {
-    // Already set to 3.3V, do nothing
     return 0;
   }
 
+  // ponytail: the NVMC ready waits have no timeout; a UICR write takes microseconds and the reset below ends this path.
   NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos;
   while(NRF_NVMC->READY == NVMC_READY_READY_Busy) {
-    ;
   }
 
-  NRF_UICR->REGOUT0 = (NRF_UICR->REGOUT0 & ~((uint32_t)UICR_REGOUT0_VOUT_Msk)) | (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos);
+  NRF_UICR->REGOUT0 = (NRF_UICR->REGOUT0 & ~static_cast<std::uint32_t>(UICR_REGOUT0_VOUT_Msk)) | (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos);
 
   NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos;
   while(NRF_NVMC->READY == NVMC_READY_READY_Busy) {
-    ;
   }
 
   NVIC_SystemReset();
 }
 
 SYS_INIT(set_gpio_voltage, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+
+} // namespace

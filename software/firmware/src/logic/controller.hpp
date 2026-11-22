@@ -48,9 +48,8 @@ struct device_settings {
   friend auto operator==(device_settings const &, device_settings const &) -> bool = default;
 };
 
-// Wire and flash format: flags (bit 0 stealth, bit 1 transport lock), auto-off minutes, fan step, fan mode, motion idle
-// slow-down seconds, still, walking and running speed. The 6-byte format of firmware 0.3.1 (one speed, taken as the still
-// speed) and the 2-byte format of firmware 0.2.0 (the first two fields) are still accepted; missing fields keep their defaults.
+// Wire and flash format: flags (bit 0 stealth, bit 1 transport lock), auto-off minutes, fan step, fan mode, motion delay in
+// seconds, still, walking and running speed. Shorter 6- and 2-byte forms are accepted; missing fields keep their defaults.
 constexpr std::size_t settings_size = 8;
 constexpr std::size_t settings_size_v2 = 6;
 constexpr std::size_t settings_size_v1 = 2;
@@ -104,7 +103,7 @@ public:
   void set_strobe(bool on);
   void handle(battery_status status);
   // Settings loaded from flash.
-  void configure(device_settings s) noexcept { cfg = s; }
+  void configure(device_settings loaded) noexcept { config = loaded; }
   // The battery sample taken at boot: powers off at once, without starting the fan, when it is too low to run.
   void check_start(battery_status status);
   // The status LED shows `s` (unless stealth); for the board layer's own events.
@@ -112,7 +111,7 @@ public:
   // The accelerometer does not answer any more: motion mode runs at the still speed.
   void sensor_lost();
   // Settings written by the user (Bluetooth): stored through `outputs::settings_changed`.
-  void update_settings(device_settings s);
+  void update_settings(device_settings written);
   // Activity measured over one second of accelerometer data; only used in motion mode.
   void observe(activity_level raw);
   // Counts idle time for the auto-off; call it periodically with the time since the last call.
@@ -120,17 +119,19 @@ public:
 
   // What the fan runs at: the manual target, or in motion mode the target of the current activity level; 0 while the
   // transport lock is on (the targets are kept).
-  [[nodiscard]] auto fan_speed() const noexcept -> unsigned { return cfg.transport_lock ? 0 : target_fan(); }
+  [[nodiscard]] auto fan_speed() const noexcept -> unsigned { return config.transport_lock ? 0 : target_fan(); }
   // The current activity level for Bluetooth: 0 still, 1 walking, 2 running, 255 in manual mode.
-  [[nodiscard]] auto activity_code() const noexcept -> std::uint8_t { return cfg.mode == fan_mode::motion ? static_cast<std::uint8_t>(level) : 255; }
-  [[nodiscard]] auto strobe() const noexcept -> bool { return strobe_on && !cfg.transport_lock; }
+  [[nodiscard]] auto activity_code() const noexcept -> std::uint8_t {
+    return config.mode == fan_mode::motion ? static_cast<std::uint8_t>(level) : 255;
+  }
+  [[nodiscard]] auto strobe() const noexcept -> bool { return strobe_on && !config.transport_lock; }
   [[nodiscard]] auto battery_level() const noexcept -> std::uint8_t { return battery; }
-  [[nodiscard]] auto settings() const noexcept -> device_settings { return cfg; }
+  [[nodiscard]] auto settings() const noexcept -> device_settings { return config; }
 
 private:
   void change_fan_speed(int delta);
   [[nodiscard]] auto target_fan() const noexcept -> unsigned {
-    return cfg.mode == fan_mode::motion ? cfg.motion_speed[static_cast<unsigned>(level)] : fan;
+    return config.mode == fan_mode::motion ? config.motion_speed[static_cast<unsigned>(level)] : fan;
   }
   void apply_fan() { out.set_fan(fan_speed()); }
   void apply_strobe() { out.set_strobe(strobe()); }
@@ -145,7 +146,7 @@ private:
   unsigned falling_s{0};                           // Consecutive seconds below `level`.
   bool strobe_on{false};
   std::uint8_t battery{0};
-  device_settings cfg;
+  device_settings config;
   unsigned idle_seconds{0};
   bool battery_warned{false};
   battery_guard guard;

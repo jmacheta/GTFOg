@@ -37,14 +37,14 @@ constexpr color red{255, 0, 0};
 constexpr color cyan{0, 255, 255};
 
 struct pattern {
-  color c;
+  color shown;
   unsigned blinks;
   std::int32_t on_ms;
   std::int32_t off_ms;
 };
 
-constexpr auto pattern_of(signal s) noexcept -> pattern {
-  switch(s) {
+constexpr auto pattern_of(signal what) noexcept -> pattern {
+  switch(what) {
   case signal::power_on:
     return {green, 3, 50, 50};
   case signal::speed_up:
@@ -78,10 +78,10 @@ void set_pwm(pwm_dt_spec const &spec, unsigned permille) {
   }
 }
 
-void set_color(color c) {
-  set_pwm(led_pwm[0], c.red * 1000u / 255u);
-  set_pwm(led_pwm[1], c.green * 1000u / 255u);
-  set_pwm(led_pwm[2], c.blue * 1000u / 255u);
+void set_color(color shown) {
+  set_pwm(led_pwm[0], shown.red * 1000u / 255u);
+  set_pwm(led_pwm[1], shown.green * 1000u / 255u);
+  set_pwm(led_pwm[2], shown.blue * 1000u / 255u);
 }
 
 // The pattern state is touched by show() (any thread), indicator_step() (system workqueue) and power_off(); `pattern_lock`
@@ -106,19 +106,26 @@ void indicator_step(k_work *) {
   auto duration_ms = lit ? shown.on_ms : shown.off_ms;
   phase_end_ms = k_uptime_get() + duration_ms;
   k_spin_unlock(&pattern_lock, key);
-  set_color(lit ? shown.c : black);
+  set_color(lit ? shown.shown : black);
   k_work_schedule(&indicator_work, K_MSEC(duration_ms));
 }
 
+// `strobe_mutex` guards the two flags and the strobe PWM, so a step that runs while the strobe is switched off cannot undo it.
+bool strobe_wanted;
 bool strobe_lit;
+K_MUTEX_DEFINE(strobe_mutex);
 
 void strobe_step(k_work *work);
 K_WORK_DELAYABLE_DEFINE(strobe_work, strobe_step);
 
 void strobe_step(k_work *) {
-  strobe_lit = !strobe_lit;
-  set_pwm(strobe_pwm, strobe_lit ? 1000 : 0);
-  k_work_schedule(&strobe_work, K_MSEC(strobe_half_period_ms));
+  k_mutex_lock(&strobe_mutex, K_FOREVER);
+  if(strobe_wanted) {
+    strobe_lit = !strobe_lit;
+    set_pwm(strobe_pwm, strobe_lit ? 1000 : 0);
+    k_work_schedule(&strobe_work, K_MSEC(strobe_half_period_ms));
+  }
+  k_mutex_unlock(&strobe_mutex);
 }
 
 class board_outputs final : public outputs {
@@ -131,6 +138,8 @@ public:
   }
 
   void set_strobe(bool on) override {
+    k_mutex_lock(&strobe_mutex, K_FOREVER);
+    strobe_wanted = on;
     if(on) {
       k_work_schedule(&strobe_work, K_NO_WAIT);
     } else {
@@ -138,25 +147,29 @@ public:
       strobe_lit = false;
       set_pwm(strobe_pwm, 0);
     }
+    k_mutex_unlock(&strobe_mutex);
     ble_state_changed();
   }
 
-  void show(signal s) override {
+  void show(signal what) override {
     k_work_cancel_delayable(&indicator_work);
     auto key = k_spin_lock(&pattern_lock);
-    current_pattern = pattern_of(s);
+    current_pattern = pattern_of(what);
     pattern_phase = 0;
     k_spin_unlock(&pattern_lock, key);
     k_work_schedule(&indicator_work, K_NO_WAIT);
   }
 
-  void settings_changed(device_settings const &s) override {
-    ble_settings_changed(s);
-    accelerometer_motion_mode(s.follows_motion());
+  void settings_changed(device_settings const &settings) override {
+    ble_settings_changed(settings);
+    accelerometer_motion_mode(settings.follows_motion());
   }
 
   void power_off() override {
     LOG_INF("power off");
+    // The caller holds the controller mutex until System OFF, so the battery thread cannot feed the 30 s watchdog.
+    // Worst case: pattern 1.6 s (low_battery 1.2 s plus a phase still running), flash write about 0.1 s, accelerometer
+    // 1 s, buttons 10 s: about 13 s.
     // The system workqueue may be blocked on the controller mutex, which the caller holds: finish the pattern here and
     // wait for no work item.
     k_work_cancel_delayable(&indicator_work);
@@ -171,7 +184,7 @@ public:
     }
     for(; phase < 2 * shown.blinks; ++phase) {
       bool lit = phase % 2 == 0;
-      set_color(lit ? shown.c : black);
+      set_color(lit ? shown.shown : black);
       k_msleep(lit ? shown.on_ms : shown.off_ms);
     }
     set_color(black);

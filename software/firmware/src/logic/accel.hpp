@@ -13,7 +13,12 @@ struct accel_sample {
   std::int16_t x, y, z;
 };
 
-[[nodiscard]] constexpr auto counts_to_milli_g(std::int16_t counts) noexcept -> std::int16_t { return static_cast<std::int16_t>(counts * 39 / 10); }
+// Full resolution reads +-4096 counts at most (+-16 g); a corrupt sample is clamped to that.
+constexpr int accel_max_counts = 4096;
+[[nodiscard]] constexpr auto counts_to_milli_g(std::int16_t counts) noexcept -> std::int16_t {
+  int clamped = counts > accel_max_counts ? accel_max_counts : (counts < -accel_max_counts ? -accel_max_counts : counts);
+  return static_cast<std::int16_t>(clamped * 39 / 10);
+}
 
 // Accelerometer stream notification: u16 seq, u8 rate_hz, u8 count, then count x (int16 x, y, z) in mg, little endian.
 constexpr std::size_t accel_header_size = 4;

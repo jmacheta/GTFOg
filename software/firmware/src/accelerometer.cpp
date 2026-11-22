@@ -25,6 +25,7 @@ gpio_dt_spec const power = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), accelerometer_
 
 constexpr unsigned poll_ms = 200; // The 32-sample FIFO holds 320 ms at 100 Hz.
 constexpr auto retry_delay = K_SECONDS(10);
+constexpr auto lost_retry_delay = K_SECONDS(60); // A sensor that was given up on is tried again this rarely.
 
 std::atomic<bool> streaming{false};
 std::atomic<bool> motion_mode{false};
@@ -41,7 +42,9 @@ auto power_up() -> int {
     return err;
   }
   k_msleep(100);
-  gpio_pin_set_dt(&power, 1);
+  if(int err = gpio_pin_set_dt(&power, 1); err != 0) {
+    return err;
+  }
   k_msleep(500);
 
   std::uint8_t id = 0;
@@ -65,7 +68,7 @@ void flush_fifo() {
 
 void sensor_gone() {
   LOG_ERR("accelerometer lost");
-  with_controller([](gtfog::controller &c) { c.sensor_lost(); });
+  with_controller([](gtfog::controller &control) { control.sensor_lost(); });
 }
 
 void accelerometer_thread(void *, void *, void *) {
@@ -86,10 +89,11 @@ void accelerometer_thread(void *, void *, void *) {
     if(int err = power_up(); err != 0) {
       LOG_ERR("power up: %d", err);
       power_down();
-      if(watchdog.poll(false, gtfog::fifo_watchdog::stall_ms) == verdict::lost) {
+      bool lost = watchdog.poll(false, gtfog::fifo_watchdog::stall_ms) == verdict::lost;
+      if(lost) {
         sensor_gone();
       }
-      k_sem_take(&wanted_changed, retry_delay);
+      k_sem_take(&wanted_changed, lost ? lost_retry_delay : retry_delay);
       continue;
     }
     gtfog::activity_classifier classifier;
@@ -135,14 +139,18 @@ void accelerometer_thread(void *, void *, void *) {
         }
       }
       if(motion_mode && level) {
-        with_controller([&](gtfog::controller &c) { c.observe(*level); });
+        with_controller([&](gtfog::controller &control) { control.observe(*level); });
       }
-      auto v = watchdog.poll(healthy, poll_ms);
-      if(v == verdict::lost) {
+      auto verdict_now = watchdog.poll(healthy, poll_ms);
+      if(verdict_now == verdict::lost) {
         sensor_gone();
       }
-      if(v != verdict::ok) {
+      if(verdict_now != verdict::ok) {
         LOG_WRN("no samples, power cycling the sensor");
+        if(verdict_now == verdict::lost) {
+          power_down();
+          k_sem_take(&wanted_changed, lost_retry_delay); // A settings change may cut this short.
+        }
         break; // Back to power_up().
       }
       k_msleep(poll_ms);

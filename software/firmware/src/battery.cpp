@@ -82,7 +82,7 @@ void battery_thread(void *, void *, void *) {
     LOG_ERR("setup: %d", setup_err);
     // ponytail: the low-battery cutoff and the BAS value are gone; show it once, after the power-on signal.
     k_sleep(K_SECONDS(2));
-    with_controller([](gtfog::controller &c) { c.report(gtfog::signal::fault); });
+    with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
   }
   std::int64_t counted_ms = k_uptime_get();
   while(true) {
@@ -92,14 +92,14 @@ void battery_thread(void *, void *, void *) {
     int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
     if(millivolts < 0) {
       LOG_WRN("ADC read: %d", millivolts);
-      with_controller([&](gtfog::controller &c) { c.elapsed(idle_s, ble_connected()); });
+      with_controller([&](gtfog::controller &control) { control.elapsed(idle_s, ble_connected()); });
     } else {
       auto status = make_status(millivolts);
       LOG_DBG("%d mV, charger %d", millivolts, static_cast<int>(status.charger));
-      auto percent = with_controller([&](gtfog::controller &c) {
-        c.handle(status);
-        c.elapsed(idle_s, ble_connected());
-        return c.battery_level();
+      auto percent = with_controller([&](gtfog::controller &control) {
+        control.handle(status);
+        control.elapsed(idle_s, ble_connected());
+        return control.battery_level();
       });
       ble_battery_changed(percent);
       ble_charger_changed(status.charger);

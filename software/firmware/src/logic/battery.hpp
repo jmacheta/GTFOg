@@ -6,7 +6,7 @@
 namespace gtfog {
 
 // Charger state, from the levels of the BQ25185 STAT1 and STAT2 pins (true = high).
-// The values go over Bluetooth; 2 (charge completed) is retired, the pins do not tell it apart from "no input".
+// The values go over Bluetooth; 2 is unused, the pins do not tell "charge completed" apart from "no input".
 enum class charger_state : std::uint8_t {
   not_charging = 0, // Also charge done and no USB power.
   charging = 1,

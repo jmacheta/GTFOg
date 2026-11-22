@@ -44,12 +44,16 @@ public:
   // Call on every pin change and periodically while a button is pressed; returns at most one action per call.
   [[nodiscard]] auto update(bool plus_pressed, bool minus_pressed, std::chrono::milliseconds now) noexcept -> std::optional<button_event>;
 
-  // True when no button is pressed, so the caller can wait for the next pin change.
-  [[nodiscard]] auto is_idle() const noexcept -> bool { return !plus.pressed && !minus.pressed; }
+  // Ignores the buttons until both have been seen released once; for a press that is still going on at boot.
+  void wait_for_release() noexcept { waiting = true; }
+
+  // True when no button needs a timer (none pressed, or only stuck ones), so the caller can wait for the next pin change.
+  [[nodiscard]] auto is_idle() const noexcept -> bool { return (!plus.pressed || plus.stuck) && (!minus.pressed || minus.stuck); }
 
 private:
   struct button {
     bool pressed{false};
+    bool stuck{false}; // Held for `button_timing::stuck`; ignored until released.
     std::chrono::milliseconds pressed_at{};
     std::chrono::milliseconds next_repeat{};
   };
@@ -61,7 +65,8 @@ private:
   button_timing timing;
   button plus;
   button minus;
-  bool chord{false}; // Both buttons went down together; single actions stay off until both are released.
+  bool waiting{false}; // See wait_for_release().
+  bool chord{false};   // Both buttons went down together; single actions stay off until both are released.
   std::chrono::milliseconds chord_since{};
   bool chord_done{false}; // The chord fired, or a button was let go: it cannot fire any more.
   unsigned taps{0};       // Short presses of plus within the unlock window.

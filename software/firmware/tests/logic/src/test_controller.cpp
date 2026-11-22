@@ -533,3 +533,45 @@ ZTEST(controller, test_value_and_length_checks) {
   zassert_true(is_settings_size(8) && is_settings_size(6) && is_settings_size(2));
   zassert_false(is_settings_size(0) || is_settings_size(7) || is_settings_size(9));
 }
+
+ZTEST(controller, test_motion_mode_with_transport_lock_counts_movement_as_idle) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.transport_lock = true, .auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5});
+  c.power_on();
+  feed(c, activity_level::running, 2);
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, false);
+  zassert_true(out.powered_off, "the locked fan is off, so movement is no use");
+}
+
+ZTEST(controller, test_lost_sensor_in_motion_mode_ends_in_auto_off) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5, .motion_speed = {20, 50, 80}});
+  c.power_on();
+  feed(c, activity_level::running, 2);
+  c.elapsed(120, false);
+  zassert_false(out.powered_off);
+  c.sensor_lost();
+  c.elapsed(50, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10, false);
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_charger_fault_does_not_hide_a_low_cell) {
+  fake_outputs out;
+  controller c{out};
+  c.power_on();
+  for(int i = 0; i != 5; ++i) {
+    c.handle(battery_status{3800, charger_state::fault});
+  }
+  zassert_false(out.powered_off);
+  zassert_equal(c.battery_level(), 50);
+  for(int i = 0; i != 3; ++i) {
+    c.handle(battery_status{3200, charger_state::fault});
+  }
+  zassert_true(out.powered_off, "only the charging state excuses a low cell");
+}

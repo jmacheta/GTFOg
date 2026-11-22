@@ -6,7 +6,7 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 
 - **Small and predictable.** A battery-powered nRF52833 (512 KiB flash, 128 KiB RAM, of which an application slot is
   212 KB). No dynamic allocation in application code; threads and stacks are static (`K_THREAD_DEFINE`). The application
-  uses about 156 KB of about 204 KB, so features still have to pay for themselves.
+  uses about 160 KB of about 204 KB, so features still have to pay for themselves.
 - **Modern C++.** C++23 (`CONFIG_STD_CPP23`), `std::chrono` for every time value, `constexpr` where it helps, no
   exceptions, no RTTI.
 - **Safe in the field.** The fan and strobe never depend on a radio or a phone: manual control works without BLE.
@@ -30,8 +30,8 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
   an output that waits for a work item deadlocks; `outputs` methods do their timing in the calling thread or hand off
   work without blocking (`settings_changed`).
 - **One thread per sampled input.** `buttons`, `battery` and `accelerometer` are static threads; timed output
-  (strobe, LED patterns) runs as `k_work` on the system workqueue. `main` powers the controller on, starts BLE, confirms
-  the image and returns.
+  (strobe, LED patterns) runs as `k_work` on the system workqueue. `main` starts BLE, confirms
+  the image, checks the battery, powers the controller on and returns.
 - **Pins and peripherals live in the board definition.** Application code reads GPIOs, PWM, ADC and I2C through
   devicetree labels and the `zephyr,user` node, so a pin change is a change in `gtfog.dts` only.
 - **Configuration** is `constexpr` values next to the code that uses them and Kconfig. Settings (NVS in

@@ -13,7 +13,9 @@ ZTEST(accel, test_counts_to_milli_g) {
   zassert_equal(counts_to_milli_g(0), 0);
   zassert_equal(counts_to_milli_g(256), 998); // About 1 g.
   zassert_equal(counts_to_milli_g(-256), -998);
-  zassert_equal(counts_to_milli_g(4095), 15970); // +-16 g full scale fits int16.
+  zassert_equal(counts_to_milli_g(4095), 15970);  // +-16 g full scale fits int16.
+  zassert_equal(counts_to_milli_g(32767), 15974); // A corrupt sample is clamped, not wrapped.
+  zassert_equal(counts_to_milli_g(-32768), -15974);
 }
 
 ZTEST(accel, test_samples_per_packet) {

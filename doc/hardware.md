@@ -77,7 +77,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | `image-1` (slot 1) | 0x45000 | 0x35000 (212 KB) |
 | `storage` | 0x7A000 | 0x06000 (24 KB) |
 
-There is no scratch partition (swap using move). Use: the application (built with LTO) takes about 156 KB of about 204 KB
+There is no scratch partition (swap using move). Use: the application (built with LTO) takes about 160 KB of about 204 KB
 available, MCUboot about 54 KB of 64 KB. `storage` holds the Bluetooth bonds and the device settings. Boards with an MCUboot built for an older map
 need the new MCUboot over SWD once.
 

@@ -25,13 +25,13 @@ Board layer (`src/`):
 | `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog; `battery_sample()` for the boot check |
 | `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service (the mcumgr SMP service comes from NCS) |
 | `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 only while a phone streams or motion mode is on (the thread owns the power pin); feeds the activity classifier and the stream; power-cycles a silent sensor |
-| `main.cpp` | `main()`: loads the settings (`app_settings_load`), checks the battery (`check_start`), `ble_init`, `power_on`, confirms the running image once Bluetooth is up; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
+| `main.cpp` | `main()`: loads the settings (`app_settings_load`), `ble_init`, confirms the running image once Bluetooth is up, checks the battery (`check_start`), `power_on`; `SYS_INIT` hook that sets the GPIO supply (UICR `REGOUT0`) to 3.3 V and resets once if it is not |
 
 ## Threads
 
 | Thread | Priority | Stack | Job |
 | --- | --- | --- | --- |
-| `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Powers the controller on, starts BLE, confirms the image, returns |
+| `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Starts BLE, confirms the image, checks the battery, powers the controller on, returns |
 | `buttons` | 5 | 1024 B | Waits for a pin change; polls every 20 ms while a button is down |
 | `battery` | 7 | 1024 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
@@ -42,11 +42,11 @@ The strobe, the LED patterns, BLE notifications, saving the settings and the adv
 ## Controller
 
 `controller` (`src/logic/controller.cpp`) holds the target fan speed (0..100 %, what the user set and BLE reads), the strobe state, the battery percentage and
-the `device_settings`, and drives an `outputs` object. Signals go to `outputs::show()` only when stealth mode is off.
+the `device_settings`, and drives an `outputs` object. Signals go to `outputs::show()` only when stealth mode is off. Stealth is strict: it also hides `low_battery`, `battery_warning` and `fault`, so the fan simply stops at the battery cutoff; the phone shows the battery level, the charger state and the fan state.
 
 | Input | Effect |
 | --- | --- |
-| `check_start(status)` (`main()`, one ADC sample before `power_on`) | Below 3400 mV and not charging: signal `low_battery` and power off at once, the fan never starts (`battery_allows_start`). No ADC: the device starts |
+| `check_start(status)` (`main()`, one ADC sample before `power_on`, after the image confirmation) | Below 3400 mV and not charging: signal `low_battery` and power off at once, the fan never starts (`battery_allows_start`). No ADC: the device starts |
 | `power_on()` | Signal `power_on`, strobe off, fan 0 (in motion mode the still speed, level still; under the transport lock always 0) |
 | Any button while `transport_lock` is on | Signal `locked`, nothing else; only `power_off` and `unlock` still work |
 | `transport_lock` on | `fan_speed()` is 0 and `strobe()` false in both modes, also for Bluetooth writes and `power_on`; turning the lock on (Bluetooth) stops a running fan and strobe. The targets are kept, so unlocking restores them |
@@ -57,7 +57,7 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal. In motion mode it sets the target of the current activity level and stores the settings |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
 | `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off. Otherwise signal `battery_warning` once when the level reaches 10 % or less, armed again above 15 % |
-| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off` |
+| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off`. Motion mode at level still counts as idle on purpose (goggles left on a shelf turn off), so a user who stays motionless for `auto_off_minutes` is powered off although the fan runs at the still speed; set auto-off to 0 or move, a phone connection also keeps it on |
 | `sensor_lost()` (accelerometer) | Level still (so motion mode runs at the still speed and the activity code is 0), signal `fault` |
 | `report(signal)` (board layer) | Shows the signal unless stealth: `pairing_refused`, `fault` |
 | `observe(level)` (accelerometer, once per second, motion mode) | Raw activity level of the last second; may switch the level, see [Motion mode](#motion-mode) |
@@ -106,15 +106,15 @@ re-evaluates every 20 ms. Thresholds are `button_timing` defaults in `buttons.hp
 
 | Gesture | Result |
 | --- | --- |
-| Short press: released after 50 ms up to under 500 ms | Plus: fan +1; minus: fan -1 (reported on release) |
+| Short press: released after 50 ms up to under 500 ms | Plus: fan up one step (`fan_step`, default 5 %); minus: down one step (reported on release); a release after 500 ms and before the first repeat counts as one step too |
 | Shorter than 50 ms | Ignored (bounce) |
 | Hold of at least 500 ms | Repeats every 200 ms; steps per repeat = `1 + hold_time / 3 s`, at most 5 |
-| Held for at least 30 s | Stuck: ignored until released |
+| Held for at least 30 s | Stuck: ignored until released; the thread stops polling and sleeps until the next pin change |
 | Both held, released after 2 s and before 5 s | Strobe toggles, once, on release |
 | Both held for 5 s | Power off, while still held (the strobe does not toggle) |
 | Three short presses of plus, the third within 2 s of the first | Third press is `unlock` instead of plus (see [Controller](#controller)) |
 
-Once both buttons are down together, single-button actions stay off until both are released; letting one go before 2 s cancels the chord; letting one go later toggles the strobe. One action is returned per sample.
+A press that is still held when the thread starts (the press that woke the device) is ignored until both buttons have been released once. Once both buttons are down together, single-button actions stay off until both are released; letting one go before 2 s cancels the chord; letting one go later toggles the strobe. One action is returned per sample.
 
 ## Fan
 
@@ -125,7 +125,7 @@ pulse width in 64 bits (5 ms x 1000 overflows 32 bits). In motion mode the fan s
 ## Strobe
 
 PWM1 channel 0, 1 ms period, normal polarity. On: full duty for 100 ms, off for 100 ms, repeated by a `k_work`. Off:
-the work is cancelled and the duty is 0.
+the work is cancelled and the duty is 0. A step that is already running checks the wanted state under a mutex, so it cannot switch the strobe back on.
 
 ## Status LED
 
@@ -165,7 +165,7 @@ and blinks; a new signal replaces the running one.
 Peripheral, device name `GTFOg`, one connection at a time (`CONFIG_BT_MAX_CONN=1`), ATT MTU 247, data length 251.
 GATT caching is on, so bonded phones get Service Changed and rediscover the database after a firmware update.
 Advertising data: flags and the control service UUID; the name is in the scan
-response. Advertising restarts after a disconnect.
+response. Advertising restarts after a disconnect; when starting it fails, it is retried every 5 s. The image is confirmed only when `bt_enable` succeeded, not when advertising starts.
 
 | Service | UUID | Characteristic | Properties |
 | --- | --- | --- | --- |
@@ -179,12 +179,12 @@ response. Advertising restarts after a disconnect.
 | Battery Service | standard | Battery level, updated every 10 s | per Zephyr BAS |
 | Device Information Service | standard | Model number `GTFOg`, manufacturer `elmaczete_customs` | per Zephyr DIS |
 
-The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing); bonds are stored
+The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing, LE Secure Connections only: `CONFIG_BT_SMP_SC_ONLY`, so a phone without them cannot pair); bonds are stored
 in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2, 6 or 8); out-of-range values are rejected. Changes made by the
 buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
 (`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
 
-New pairings are accepted only in the first 3 minutes after boot (`pairing_accept` in `ble.cpp`; every wake from System OFF is a boot); later requests are refused with `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`. Bonded phones reconnect at any time. A refused request shows the `pairing_refused` signal (posted by a `k_work`, as the callback must not take the controller mutex). Pairing stays Just Works.
+New pairings are accepted only in the first 3 minutes after boot (`pairing_accept` in `ble.cpp`; every wake from System OFF is a boot); later requests are refused with `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`. Bonded phones reconnect at any time. A refused request shows the `pairing_refused` signal (posted by a `k_work`, as the callback must not take the controller mutex). Pairing stays Just Works, but legacy pairing is not accepted.
 
 ## Accelerometer
 
@@ -199,7 +199,7 @@ devicetree and unused.
 
 Faults: a poll that fails or finds the FIFO empty counts as unhealthy (`fifo_watchdog`); after 1 s of them the sensor is power-cycled
 (`power_up()` again; a failed power-up counts too). The third such recovery in a row calls `controller::sensor_lost()` once (signal
-`fault`, level still, logged) and the retries go on. A full FIFO (32 entries, `fifo_overflowed`) is flushed and polling continues.
+`fault`, level still, logged); the sensor then stays off for 60 s before the next attempt (10 s after a failed power-up). A full FIFO (32 entries, `fifo_overflowed`) is flushed and polling continues.
 The thread owns the power pin: `accelerometer_power_off()` sets a shutdown flag, wakes the thread and waits at most 1 s for it to
 drive the pin low, then drives it low itself.
 
@@ -213,7 +213,7 @@ in `ble_test.py`.
 `board_outputs::power_off()` runs under the controller mutex, so it waits for no work item: it cancels the LED pattern
 and plays the rest of it itself with `k_msleep` (the system workqueue may be blocked on the mutex), turns the LED off,
 saves a pending settings change (`ble_settings_flush`), cuts the accelerometer power, waits until both buttons are released (at most 10 s), arms both as level-active wake
-sources and calls `sys_poweroff()` (System OFF). A press wakes the chip through a reset.
+sources and calls `sys_poweroff()` (System OFF). A press wakes the chip through a reset. The mutex is held the whole time, so the battery thread cannot feed the watchdog; the worst case is about 13 s (pattern 1.6 s, flash 0.1 s, accelerometer 1 s, buttons 10 s) against the 30 s timeout, so a longer pattern or wait needs the watchdog margin rechecked.
 
 ## Watchdog
 
@@ -239,7 +239,7 @@ smpmgr --ble <address> os reset
 
   `smpmgr upgrade` uploads and resets but does not mark the image, so it does not install it.
 - Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`) only after
-  Bluetooth initialized; an unconfirmed image is reverted by MCUboot on the next reset (verified on hardware both ways).
+  Bluetooth initialized, and before the boot battery check, so a power off for a low cell does not revert it; an unconfirmed image is reverted by MCUboot on the next reset (verified on hardware both ways).
 - The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older or equal
   image, so raise it for every update.
 - Recovery: MCUboot has serial recovery over USB CDC ACM (mcumgr protocol, VID:PID `1209:EACD`, manufacturer
@@ -268,5 +268,5 @@ logging off.
 - MCUboot USB serial recovery is not tested on hardware.
 - BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
   host receives it, so its RF path or 32 MHz crystal is suspect.
-- Release builds need the private signing key (see above); pairing is Just Works within the first 3 minutes after every wake, so anyone in range can pair then.
+- Release builds need the private signing key (see above); pairing is Just Works (LE Secure Connections only) within the first 3 minutes after every wake, so anyone in range can pair then.
 - Hardware to verify: sensor recovery and loss handling, the 200 ms FIFO poll (no overflow), the boot battery check, the `fault` and `pairing_refused` patterns.

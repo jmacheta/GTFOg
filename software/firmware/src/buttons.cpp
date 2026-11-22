@@ -6,6 +6,7 @@
 #include <zephyr/logging/log.h>
 
 #include <chrono>
+#include <tuple>
 
 LOG_MODULE_REGISTER(buttons, LOG_LEVEL_INF);
 
@@ -49,16 +50,17 @@ SYS_INIT(buttons_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 void buttons_thread(void *, void *, void *) {
   gtfog::button_gestures gestures;
+  gestures.wait_for_release(); // The press that woke the device may still be going on.
   if(init_error != 0) {
     LOG_ERR("buttons: %d", init_error);
     // ponytail: no interrupts, so only the polling below could work; show the fault once, after the power-on signal.
     k_sleep(K_SECONDS(2));
-    with_controller([](gtfog::controller &c) { c.report(gtfog::signal::fault); });
+    with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
   }
   while(true) {
     auto now = std::chrono::milliseconds{k_uptime_get()};
     if(auto event = gestures.update(gpio_pin_get_dt(&plus) > 0, gpio_pin_get_dt(&minus) > 0, now)) {
-      with_controller([&](gtfog::controller &c) { c.handle(*event); });
+      with_controller([&](gtfog::controller &control) { control.handle(*event); });
     }
     k_sem_take(&button_changed, gestures.is_idle() ? K_FOREVER : poll_interval);
   }
@@ -73,8 +75,9 @@ void buttons_arm_wake() {
   for(int waited = 0; waited < release_timeout_ms && (gpio_pin_get_dt(&plus) > 0 || gpio_pin_get_dt(&minus) > 0); waited += 10) {
     k_msleep(10);
   }
-  gpio_remove_callback_dt(&plus, &plus_callback);
-  gpio_remove_callback_dt(&minus, &minus_callback);
+  // Not registered when setup failed (-EINVAL); the level interrupts below do not need the callbacks.
+  std::ignore = gpio_remove_callback_dt(&plus, &plus_callback);
+  std::ignore = gpio_remove_callback_dt(&minus, &minus_callback);
   if(gpio_pin_interrupt_configure_dt(&plus, GPIO_INT_LEVEL_ACTIVE) != 0 || gpio_pin_interrupt_configure_dt(&minus, GPIO_INT_LEVEL_ACTIVE) != 0) {
     LOG_ERR("cannot arm the buttons for wake-up");
   }
