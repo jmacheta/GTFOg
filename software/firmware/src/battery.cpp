@@ -41,7 +41,12 @@ adc_dt_spec const vbat = ADC_DT_SPEC_GET_BY_NAME(DT_NODELABEL(adc), vbat);
 gpio_dt_spec const stat1 = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), charger_stat1_gpios);
 gpio_dt_spec const stat2 = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), charger_stat2_gpios);
 
-auto setup() -> int {
+// Called by main (boot check) and the battery thread; the first successful setup is the only one, so no channel is
+// reconfigured while the other thread reads.
+K_MUTEX_DEFINE(setup_mutex);
+bool setup_done;
+
+auto setup_once() -> int {
   if(!adc_is_ready_dt(&vbat) || !gpio_is_ready_dt(&stat1) || !gpio_is_ready_dt(&stat2)) {
     return -ENODEV;
   }
@@ -52,6 +57,14 @@ auto setup() -> int {
     return err;
   }
   return gpio_pin_configure_dt(&stat2, GPIO_INPUT);
+}
+
+auto setup() -> int {
+  k_mutex_lock(&setup_mutex, K_FOREVER);
+  int err = setup_done ? 0 : setup_once();
+  setup_done = err == 0;
+  k_mutex_unlock(&setup_mutex);
+  return err;
 }
 
 auto read_millivolts() -> int {
@@ -114,11 +127,10 @@ void battery_thread(void *, void *, void *) {
   }
 }
 
-K_THREAD_DEFINE(battery, 1536, battery_thread, nullptr, nullptr, nullptr, 7, 0, 500);
+K_THREAD_DEFINE(battery, 2048, battery_thread, nullptr, nullptr, nullptr, 7, 0, 500);
 
 } // namespace
 
-// The setup is repeated by the battery thread, which is harmless; the ADC and the pins are only read.
 auto gtfog::battery_sample() -> std::optional<gtfog::battery_status> {
   if(setup() != 0) {
     return std::nullopt;

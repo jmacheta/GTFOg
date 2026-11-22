@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <tuple>
 
@@ -25,7 +26,7 @@ constexpr std::uint8_t reg_devid = 0x00, reg_bw_rate = 0x2c, reg_power_ctl = 0x2
 i2c_dt_spec const bus = I2C_DT_SPEC_GET(DT_NODELABEL(accelerometer));
 gpio_dt_spec const power = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), accelerometer_pwr_gpios);
 
-constexpr unsigned poll_ms = 200; // The 32-sample FIFO holds 320 ms at 100 Hz.
+constexpr std::chrono::milliseconds poll_time{200}; // The 32-sample FIFO holds 320 ms at 100 Hz.
 constexpr auto retry_delay = K_SECONDS(10);
 constexpr auto lost_retry_delay = K_SECONDS(60); // A sensor that was given up on is tried again this rarely.
 
@@ -45,6 +46,7 @@ void wait_before_retry(k_timeout_t delay) {
   }
 }
 
+// A pin write that fails leaves the sensor as it was; nothing else to do.
 void power_down() { std::ignore = gpio_pin_configure_dt(&power, GPIO_OUTPUT_INACTIVE); }
 
 auto power_up() -> int {
@@ -72,6 +74,7 @@ auto power_up() -> int {
 }
 
 void flush_fifo() {
+  // A missed flush only repeats or drops a few samples; a dead sensor is caught by the watchdog.
   std::ignore = i2c_reg_write_byte_dt(&bus, reg_fifo_ctl, 0x00);
   std::ignore = i2c_reg_write_byte_dt(&bus, reg_fifo_ctl, 0x80);
 }
@@ -99,11 +102,11 @@ void accelerometer_thread(void *, void *, void *) {
     if(int err = power_up(); err != 0) {
       LOG_ERR("power up: %d", err);
       power_down();
-      bool lost = watchdog.poll(false, gtfog::fifo_watchdog::stall_ms) == verdict::lost;
-      if(lost) {
+      auto verdict_now = watchdog.poll(false, gtfog::fifo_watchdog::stall_time);
+      if(verdict_now == verdict::lost) {
         sensor_gone();
       }
-      wait_before_retry(lost ? lost_retry_delay : retry_delay);
+      wait_before_retry(verdict_now == verdict::lost || verdict_now == verdict::still_lost ? lost_retry_delay : retry_delay);
       continue;
     }
     gtfog::activity_classifier classifier;
@@ -151,19 +154,19 @@ void accelerometer_thread(void *, void *, void *) {
       if(motion_mode && level) {
         with_controller([&](gtfog::controller &control) { control.observe(*level); });
       }
-      auto verdict_now = watchdog.poll(healthy, poll_ms);
+      auto verdict_now = watchdog.poll(healthy, poll_time);
       if(verdict_now == verdict::lost) {
         sensor_gone();
       }
       if(verdict_now != verdict::ok) {
         LOG_WRN("no samples, power cycling the sensor");
-        if(verdict_now == verdict::lost) {
+        if(verdict_now == verdict::lost || verdict_now == verdict::still_lost) {
           power_down();
           wait_before_retry(lost_retry_delay);
         }
         break; // Back to power_up().
       }
-      k_msleep(poll_ms);
+      k_msleep(poll_time.count());
     }
   }
 }

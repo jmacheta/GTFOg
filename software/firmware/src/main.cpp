@@ -11,6 +11,13 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 using namespace gtfog;
 
+// A new image confirms itself only when Bluetooth works, else MCUboot reverts it on the next reset.
+void confirm_image(int ble_err) {
+  if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
+    LOG_ERR("cannot confirm the image");
+  }
+}
+
 int main() {
   // The settings first (stealth decides whether the LED lights up).
   app_settings_load();
@@ -20,18 +27,18 @@ int main() {
   }
   // A cell that only recovered above the cutoff at rest must not run the fan again: power off before it starts.
   if(auto sample = battery_sample()) {
+    if(!battery_allows_start(*sample)) {
+      confirm_image(ble_err); // The power off below must not revert a good update.
+    }
     with_controller([&](gtfog::controller &control) { control.check_start(*sample); }); // Does not return when the battery is low.
   }
   accelerometer_motion_mode(with_controller([](gtfog::controller &control) {
     control.power_on();
     return control.settings().follows_motion();
   }));
-  // The battery thread (and with it the watchdog) starts 500 ms after boot, so wait for it before confirming; a new image
-  // confirms itself only when Bluetooth works, else MCUboot reverts it on the next reset.
+  // The battery thread (and with it the watchdog) starts 500 ms after boot, so wait for it before confirming.
   k_sleep(K_SECONDS(1));
-  if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
-    LOG_ERR("cannot confirm the image");
-  }
+  confirm_image(ble_err);
   LOG_INF("started");
   return 0;
 }

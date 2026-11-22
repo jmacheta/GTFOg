@@ -68,7 +68,7 @@ void buttons_thread(void *, void *, void *) {
   }
 }
 
-K_THREAD_DEFINE(buttons, 1536, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 0);
+K_THREAD_DEFINE(buttons, 2048, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 0);
 
 } // namespace
 

@@ -3,6 +3,7 @@
 #include <zephyr/ztest.h>
 
 #include <array>
+#include <chrono>
 #include <optional>
 
 using namespace gtfog;
@@ -96,18 +97,23 @@ ZTEST(motion, test_fifo_status_decoding) {
 }
 
 ZTEST(motion, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_third) {
+  using namespace std::chrono_literals;
   fifo_watchdog dog;
   using verdict = fifo_watchdog::verdict;
   for(int i = 0; i != 4; ++i) {
-    zassert_equal(dog.poll(false, 200), verdict::ok);
+    zassert_equal(dog.poll(false, 200ms), verdict::ok);
   }
-  zassert_equal(dog.poll(false, 200), verdict::recover);
-  zassert_equal(dog.poll(true, 200), verdict::ok); // A healthy poll clears the history.
+  zassert_equal(dog.poll(false, 200ms), verdict::recover);
+  zassert_equal(dog.poll(true, 200ms), verdict::ok); // A healthy poll clears the history.
   for(int round = 0; round != 2; ++round) {
-    zassert_equal(dog.poll(false, 1000), verdict::recover);
+    zassert_equal(dog.poll(false, 1000ms), verdict::recover);
   }
-  zassert_equal(dog.poll(false, 1000), verdict::lost);
-  zassert_equal(dog.poll(false, 1000), verdict::recover, "lost is reported once");
+  zassert_equal(dog.poll(false, 1000ms), verdict::lost);
+  for(int round = 0; round != 5; ++round) {
+    zassert_equal(dog.poll(false, 1000ms), verdict::still_lost, "lost is reported once, then every failure maps to the long retry");
+  }
+  zassert_equal(dog.poll(true, 200ms), verdict::ok);
+  zassert_equal(dog.poll(false, 1000ms), verdict::recover, "a healthy poll starts over");
 }
 
 ZTEST(motion, test_activity_thresholds_are_80_and_300_mg) {

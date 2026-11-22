@@ -71,10 +71,21 @@ constexpr auto pattern_of(signal what) noexcept -> pattern {
   return {black, 0, 0, 0};
 }
 
+// The fan and the RGB LED are channels of PWM0, written from controller threads and the system workqueue; one mutex serialises the
+// writes (never held across a sleep). The strobe is PWM1 and has its own lock.
+K_MUTEX_DEFINE(pwm0_mutex);
+
 void set_pwm(pwm_dt_spec const &spec, unsigned permille) {
-  // An LED or strobe glitch is harmless, so a failed write is only logged.
+  bool shared = spec.dev == fan_pwm.dev;
+  if(shared) {
+    k_mutex_lock(&pwm0_mutex, K_FOREVER);
+  }
+  // A fan, LED or strobe glitch is repaired by the next write, so a failed write is only logged.
   if(int err = pwm_set_pulse_dt(&spec, pwm_pulse_ns(spec.period, permille)); err != 0) {
     LOG_WRN("PWM %u: %d", spec.channel, err);
+  }
+  if(shared) {
+    k_mutex_unlock(&pwm0_mutex);
   }
 }
 
@@ -88,6 +99,7 @@ void set_color(color shown) {
 // guards it. The PWM writes happen outside the lock.
 pattern current_pattern;
 unsigned pattern_phase;
+bool powering_off;         // Set by power_off(): a step that was already running must not touch the LED any more.
 std::int64_t phase_end_ms; // Uptime at which the phase shown last ends.
 k_spinlock pattern_lock;
 
@@ -96,6 +108,10 @@ K_WORK_DELAYABLE_DEFINE(indicator_work, indicator_step);
 
 void indicator_step(k_work *) {
   auto key = k_spin_lock(&pattern_lock);
+  if(powering_off) {
+    k_spin_unlock(&pattern_lock, key);
+    return;
+  }
   if(pattern_phase >= 2 * current_pattern.blinks) {
     k_spin_unlock(&pattern_lock, key);
     set_color(black);
@@ -131,9 +147,7 @@ void strobe_step(k_work *) {
 class board_outputs final : public outputs {
 public:
   void set_fan(unsigned percent) override {
-    if(int err = pwm_set_pulse_dt(&fan_pwm, pwm_pulse_ns(fan_pwm.period, fan_duty_permille(percent, fan_min_duty_permille))); err != 0) {
-      LOG_ERR("fan PWM: %d", err);
-    }
+    set_pwm(fan_pwm, fan_duty_permille(percent, fan_min_duty_permille));
     ble_state_changed();
   }
 
@@ -174,7 +188,8 @@ public:
     auto shown = current_pattern;
     auto phase = pattern_phase;
     auto end_ms = phase_end_ms;
-    pattern_phase = 2 * shown.blinks; // Nothing left for a work item that still runs.
+    pattern_phase = 2 * shown.blinks;
+    powering_off = true; // Nothing left for a work item that still runs.
     k_spin_unlock(&pattern_lock, key);
     if(auto left_ms = end_ms - k_uptime_get(); left_ms > 0) {
       k_msleep(left_ms);

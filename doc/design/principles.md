@@ -12,7 +12,7 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 - **Safe in the field.** The fan and strobe never depend on a radio or a phone: manual control works without BLE.
   Power-off by both buttons is reachable from every state.
 - **Updatable.** The image is signed and swapped by MCUboot (swap with revert, downgrade prevention); updates go over Bluetooth, and the image confirms itself only once Bluetooth
-  works.
+  works (at the end of `main`, or right before a low-battery power off at boot).
 
 ## Structure
 
@@ -33,8 +33,8 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
   an output that waits for a work item deadlocks; `outputs` methods do their timing in the calling thread or hand off
   work without blocking (`settings_changed`).
 - **One thread per sampled input.** `buttons`, `battery` and `accelerometer` are static threads; timed output
-  (strobe, LED patterns) runs as `k_work` on the system workqueue. `main` starts BLE, confirms
-  the image, checks the battery, powers the controller on and returns.
+  (strobe, LED patterns) runs as `k_work` on the system workqueue. `main` starts BLE, checks the battery (confirming the
+  image first if that check powers off), powers the controller on, confirms the image and returns.
 - **Pins and peripherals live in the board definition.** Application code reads GPIOs, PWM, ADC and I2C through
   devicetree labels and the `zephyr,user` node, so a pin change is a change in `gtfog.dts` only.
 - **Configuration** is `constexpr` values next to the code that uses them and Kconfig. Settings (NVS in

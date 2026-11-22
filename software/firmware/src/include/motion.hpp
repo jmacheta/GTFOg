@@ -1,6 +1,7 @@
 #ifndef GTFOG_MOTION_HPP
 #define GTFOG_MOTION_HPP
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -43,30 +44,35 @@ constexpr unsigned fifo_capacity = 32;
 [[nodiscard]] constexpr auto fifo_entries(std::uint8_t status) noexcept -> unsigned { return status & 0x3fu; }
 [[nodiscard]] constexpr auto fifo_overflowed(std::uint8_t status) noexcept -> bool { return fifo_entries(status) >= fifo_capacity; }
 
-// Notices a sensor that stopped delivering: a poll that fails or finds the FIFO empty is unhealthy; after `stall_ms` of
-// them the caller power-cycles the sensor, and the third such recovery in a row gives up (reported once).
+// Notices a sensor that stopped delivering: a poll that fails or finds the FIFO empty is unhealthy; after `stall_time` of
+// them the caller power-cycles the sensor, and the third such recovery in a row gives up (`lost`, once; `still_lost` for
+// every later failed recovery, until a healthy poll).
 class fifo_watchdog {
 public:
-  static constexpr unsigned stall_ms = 1000;
+  static constexpr std::chrono::milliseconds stall_time{1000};
   static constexpr unsigned max_recoveries = 3;
-  enum class verdict { ok, recover, lost };
+  enum class verdict { ok, recover, lost, still_lost };
 
-  // `elapsed_ms` since the previous poll.
-  [[nodiscard]] auto poll(bool healthy, unsigned elapsed_ms) noexcept -> verdict {
+  // `elapsed` since the previous poll.
+  [[nodiscard]] auto poll(bool healthy, std::chrono::milliseconds elapsed) noexcept -> verdict {
     if(healthy) {
-      bad_ms = recoveries = 0;
+      bad_time = std::chrono::milliseconds{0};
+      recoveries = 0;
       return verdict::ok;
     }
-    bad_ms += elapsed_ms;
-    if(bad_ms < stall_ms) {
+    bad_time += elapsed;
+    if(bad_time < stall_time) {
       return verdict::ok;
     }
-    bad_ms = 0;
-    return ++recoveries == max_recoveries ? verdict::lost : verdict::recover;
+    bad_time = std::chrono::milliseconds{0};
+    if(recoveries <= max_recoveries) { // One past the maximum marks "reported"; no further counting.
+      ++recoveries;
+    }
+    return recoveries < max_recoveries ? verdict::recover : (recoveries == max_recoveries ? verdict::lost : verdict::still_lost);
   }
 
 private:
-  unsigned bad_ms{0};
+  std::chrono::milliseconds bad_time{0};
   unsigned recoveries{0};
 };
 

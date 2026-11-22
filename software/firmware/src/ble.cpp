@@ -88,13 +88,16 @@ auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint
 
 auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
   // Shorter forms change only the fields they carry, so they are decoded on top of the current settings.
-  bool accepted = offset == 0 && with_controller([&](gtfog::controller &control) {
-                    auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len}, control.settings());
-                    if(settings) {
-                      control.update_settings(*settings); // Calls ble_settings_changed().
-                    }
-                    return settings.has_value();
-                  });
+  if(offset != 0) {
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+  }
+  bool accepted = with_controller([&](gtfog::controller &control) {
+    auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len}, control.settings());
+    if(settings) {
+      control.update_settings(*settings); // Calls ble_settings_changed().
+    }
+    return settings.has_value();
+  });
   if(!accepted) {
     return BT_GATT_ERR(gtfog::is_settings_size(len) ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }

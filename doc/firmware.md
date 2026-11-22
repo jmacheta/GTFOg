@@ -32,12 +32,12 @@ Board layer (`src/`):
 | Thread | Priority | Stack | Job |
 | --- | --- | --- | --- |
 | `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Starts BLE, checks the battery, powers the controller on, confirms the image, returns |
-| `buttons` | 5 | 1536 B | Waits for a pin change; polls every 20 ms while a button is down |
-| `battery` | 7 | 1536 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
+| `buttons` | 5 | 2048 B | Waits for a pin change; polls every 20 ms while a button is down |
+| `battery` | 7 | 2048 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
 The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
-(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 1536 B because power-off (flash save) runs in them; the headroom is not measured.
+(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 2048 B because power-off (flash save) runs in them; the headroom is not measured.
 
 ## Controller
 
@@ -129,7 +129,7 @@ the work is cancelled and the duty is 0. A step that is already running checks t
 
 ## Status LED
 
-RGB LED on PWM0 channels 0..2 (inverted polarity, 5 ms period: the channels of one PWM instance share a period). `pattern_of` in `board.cpp` maps a signal to a color
+RGB LED on PWM0 channels 0..2 (inverted polarity, 5 ms period: the channels of one PWM instance share a period). All writes to PWM0 (fan and LED) go through `set_pwm` under one mutex. `pattern_of` in `board.cpp` maps a signal to a color
 and blinks; a new signal replaces the running one.
 
 | Signal | Color | Blinks | On / off |
@@ -199,7 +199,7 @@ devicetree and unused.
 
 Faults: a poll that fails or finds the FIFO empty counts as unhealthy (`fifo_watchdog`); after 1 s of them the sensor is power-cycled
 (`power_up()` again; a failed power-up counts too). The third such recovery in a row calls `controller::sensor_lost()` once (signal
-`fault`, level still, logged); the sensor then stays off for 60 s before the next attempt (10 s after a failed power-up). A full FIFO (32 entries, `fifo_overflowed`) is flushed and polling continues.
+`fault`, level still, logged); the sensor then stays off for 60 s before every later attempt, however often it fails (`still_lost`), until it delivers samples again (10 s after a failed power-up before that). A full FIFO (32 entries, `fifo_overflowed`) is flushed and polling continues.
 The thread owns the power pin: `accelerometer_power_off()` sets a shutdown flag, wakes the thread and waits at most 1 s for it to
 drive the pin low, then drives it low itself.
 
@@ -238,15 +238,17 @@ smpmgr --ble <address> os reset
 ```
 
   `smpmgr upgrade` uploads and resets but does not mark the image, so it does not install it.
-- Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`) only after
-  Bluetooth initialized, at the end of `main()` (after the battery thread and the watchdog had 1 s to start), so a power off for a low cell does not revert it; an unconfirmed image is reverted by MCUboot on the next reset (verified on hardware both ways).
+- Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`, helper
+  `confirm_image`) only when Bluetooth initialized, and either at the end of `main()` (after the battery thread and the watchdog had 1 s to start) or, when the boot battery check finds the cell too low and `check_start` is about to power off, right before that power off, so a low-battery boot does not revert a good update. An unconfirmed image is reverted by MCUboot on the next reset.
 - The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older or equal
   image, so raise it for every update.
 - Recovery: MCUboot has serial recovery over USB CDC ACM (mcumgr protocol, VID:PID `1209:EACD`, manufacturer
   `elmaczete_customs`, product `GTFOg bootloader`). Hold the plus button for more than 1 s (`CONFIG_BOOT_SERIAL_DETECT_DELAY=1000`, so a normal press that wakes the device does not enter recovery) while the device wakes or is plugged in (devicetree
   alias `mcuboot-button0` = `button_plus` in `sysbuild/mcuboot.overlay`), then
   `smpmgr --port /dev/ttyACMx image upload ...`. MCUboot builds this on the legacy USB device stack (as it does for
-  CDC ACM recovery on nRF52); only the bootloader has USB. Not tested on hardware yet.
+  CDC ACM recovery on nRF52); only the bootloader has USB. While in recovery the red status LED is on
+  (the status hook in `mcuboot_hooks/status.c` lights it by PWM). There is no timeout: leave recovery with the reset
+  button or by power-cycling. Not tested on hardware yet.
 - MCUboot status hooks (`software/firmware/mcuboot_hooks/`, linked into the MCUboot image by `sysbuild.cmake`): at
   startup MCUboot turns the fan, the RGB LED and the strobe off; while it installs an update the red strobe blinks at
   5 Hz (hardware PWM, 200 ms period) and stops before the application starts.
