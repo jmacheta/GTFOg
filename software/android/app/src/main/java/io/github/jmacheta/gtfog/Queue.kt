@@ -55,6 +55,9 @@ class OpQueue(
     private var late: Op? = null
     private var stuck = 0
 
+    /** The late answer is awaited for one [timeoutMs] only: an answer that never comes must not swallow a later genuine one. */
+    private val lateExpiry = Runnable { late = null }
+
     val busy get() = cur != null
 
     private val timeout = object : Runnable {
@@ -64,6 +67,8 @@ class OpQueue(
                 timer.postDelayed(this, timeoutMs)
             } else {
                 late = op
+                timer.remove(lateExpiry)
+                timer.postDelayed(lateExpiry, timeoutMs)
                 end(op, OP_TIMEOUT)
             }
         }
@@ -77,6 +82,7 @@ class OpQueue(
     /** Drops everything without calling [Op.onEnd] (the link is gone). */
     fun clear() {
         timer.remove(timeout)
+        timer.remove(lateExpiry)
         queue.clear()
         cur = null
         late = null

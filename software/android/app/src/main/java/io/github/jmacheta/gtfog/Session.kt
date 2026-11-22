@@ -78,7 +78,8 @@ class Session(private val app: Application) {
     init {
         refreshRecordings()
         // The link ended (also closed by the client: bad bond, not a GTFOg, failed first connect): nothing to record any more.
-        MainScope().launch { client.state.collect { if (it.conn == Conn.Idle) stopRecording() } }
+        // Also Live going off (the accelerometer stream could not be enabled) leaves nothing to record.
+        MainScope().launch { client.state.collect { if (it.conn == Conn.Idle || (it.conn == Conn.Connected && !it.live)) stopRecording() } }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -142,9 +143,9 @@ class Session(private val app: Application) {
     }
 
     private fun onFrame(now: Long, f: AccelFrame) {
+        if (!tracker.onFrame(f.seq)) return // duplicate or reordered: not plotted, not recorded
         if (f.rateHz > 0) ring.rateHz = f.rateHz
         f.samples.forEach(ring::add)
-        tracker.onFrame(f.seq)
         stats.update { Stats(it.samples + f.samples.size, tracker.lost) }
         if (rec.value.active) {
             write(csvLines(now, f))
@@ -173,9 +174,7 @@ class Session(private val app: Application) {
         val now = Date()
         val base = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
         // Stop and Record within one second must not overwrite the earlier file.
-        var name = "$base.csv"
-        var n = 1
-        while (File(dir, name).exists()) name = "${base}_${n++}.csv"
+        val name = uniqueCsvName(base) { File(dir, it).exists() }
         recError.value = null
         // Opened on the io thread, before the first write queued after it; a full or missing storage ends here, not in a crash.
         io.execute {
@@ -187,7 +186,16 @@ class Session(private val app: Application) {
         rec.value = RecState(name, now.time, 0, 0, true)
         if (!d.live) setLive(true)
         // The service starts only once the file exists.
-        io.execute { if (writer != null) handler.post { if (rec.value.active) ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java)) } }
+        io.execute { if (writer != null) handler.post(::startService) }
+    }
+
+    private fun startService() {
+        if (!rec.value.active) return
+        // API 31+ refuses a foreground service started just after the app left the foreground.
+        runCatching { ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java)) }.onFailure {
+            recError.value = "Recording failed: the system did not allow the background service (${it.message ?: it.javaClass.simpleName})"
+            stopRecording()
+        }
     }
 
     fun stopRecording() {

@@ -17,7 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Foreground service that keeps the process, and so the GATT link and the CSV writer, alive while recording. */
@@ -52,10 +52,15 @@ class RecordService : Service() {
         }
         job?.cancel()
         job = scope.launch {
-            while (isActive && session.rec.value.active) {
-                nm.notify(ID, notification())
-                delay(5000) // the duration is a chronometer; only the counters need a refresh
+            val refresh = launch {
+                while (true) {
+                    nm.notify(ID, notification())
+                    delay(5000) // the duration is a chronometer; only the counters need a refresh
+                }
             }
+            session.rec.first { !it.active } // Stop, or the link ended: the notification goes at once
+            refresh.cancel()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
         return START_NOT_STICKY

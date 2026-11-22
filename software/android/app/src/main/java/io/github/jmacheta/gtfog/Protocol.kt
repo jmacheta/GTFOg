@@ -136,22 +136,29 @@ fun gattErrorText(status: Int): String = when (status) {
     else -> "Connection failed (status $status)"
 }
 
-/** Counts frames and frames missing between consecutive sequence numbers (u16, wrapping). */
+/** Counts frames accepted, frames missing between consecutive sequence numbers (u16, wrapping) and duplicate or reordered frames dropped. */
 class SeqTracker {
     private var last = -1
     var frames = 0L
         private set
     var lost = 0L
         private set
+    var dropped = 0L
+        private set
 
-    fun onFrame(seq: Int) {
-        frames++
+    /** True if the frame is newer than the last accepted one; false (counted in [dropped]) for a duplicate or reordered frame. */
+    fun onFrame(seq: Int): Boolean {
         if (last >= 0) {
             val gap = (seq - last - 1) and 0xFFFF
-            if (gap >= 0x8000) return // duplicate or reordered frame
+            if (gap >= 0x8000) {
+                dropped++
+                return false
+            }
             lost += gap
         }
+        frames++
         last = seq
+        return true
     }
 
     /** Forgets the last seq so a stream restart is not counted as loss. */
@@ -163,6 +170,7 @@ class SeqTracker {
         resync()
         frames = 0
         lost = 0
+        dropped = 0
     }
 }
 
@@ -248,4 +256,40 @@ fun csvReconnect(ms: Long): String = "# reconnect at $ms\n"
 fun formatDuration(ms: Long): String {
     val s = ms / 1000
     return String.format(Locale.US, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+}
+
+/** [base].csv, or [base]_1.csv, [base]_2.csv ... for the first name [exists] does not know (Stop and Record within one second). */
+fun uniqueCsvName(base: String, exists: (String) -> Boolean): String {
+    var name = "$base.csv"
+    var n = 1
+    while (exists(name)) name = "${base}_${n++}.csv"
+    return name
+}
+
+/** The state after the link ended: kept (the client retries) for Reconnect and RetryFirst, otherwise reset with [message] as the error. */
+fun DeviceState.afterLost(next: Next, message: String): DeviceState = when (next) {
+    Next.Reconnect -> copy(conn = Conn.Reconnecting, error = null)
+    Next.RetryFirst -> this // still "Connecting"
+    else -> DeviceState(error = message)
+}
+
+/** True if the client goes on trying to connect after [next]. */
+fun keepsTrying(next: Next) = next == Next.Reconnect || next == Next.RetryFirst
+
+/** The state after a notification or read of [u] with [v]; [pending] = a write to [u] is queued, so the older value is ignored. */
+fun DeviceState.withValue(u: UUID, v: ByteArray, pending: Boolean): DeviceState {
+    if (pending) return this
+    if (u == Uuids.SETTINGS) return parseSettings(v)?.let { copy(settings = it) } ?: this
+    if (v.isEmpty()) return this
+    val b = v[0].toInt() and 0xFF
+    return when (u) {
+        Uuids.FAN -> copy(fan = b)
+        Uuids.FAN_ACTUAL -> parseFanActual(v)?.let { copy(fanActual = it.percent, activity = it.level) } ?: this
+        Uuids.STROBE -> copy(strobe = b != 0)
+        Uuids.CHARGER -> copy(charger = b)
+        Uuids.BATTERY -> copy(battery = b)
+        Uuids.MODEL -> copy(model = v.decodeToString())
+        Uuids.MANUFACTURER -> copy(manufacturer = v.decodeToString())
+        else -> this
+    }
 }

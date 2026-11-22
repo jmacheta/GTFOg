@@ -85,7 +85,7 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val connected = st.conn == Conn.Connected
-    val block = dfuBlockReason(st.battery)
+    val block = installBlockReason(st.battery, d.installed, d.fileVersion)
     // Not right after an update: Dfu reads the version itself once the goggles are back.
     LaunchedEffect(connected, d.installed == null, d.done) { if (connected && d.installed == null && !d.done) s.dfu.refresh() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -109,20 +109,19 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
                     (if (d.installed == null && d.refreshError != null) " (could not read: ${d.refreshError})" else ""),
             )
             if (d.file != null) Text("File: ${d.file}" + (d.fileVersion?.let { " (version $it)" } ?: ""))
-            versionHint(d.installed, d.fileVersion)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            if (d.image != null && !d.running && block != null) Text(block, color = MaterialTheme.colorScheme.error)
+            if (d.hasImage && !d.running && block != null) Text(block, color = MaterialTheme.colorScheme.error)
             if (d.running) {
                 Text("Keep the app open and the phone near the goggles until the update is done. Live accelerometer and recording are stopped during the update.")
                 LinearProgressIndicator(progress = { d.percent / 100f }, Modifier.fillMaxWidth())
-                Text("${d.status} ${d.percent}%")
-                if (d.status == "Uploading") OutlinedButton({ s.dfu.cancel() }, Modifier.heightIn(min = TouchHeight)) { Text("Cancel") }
+                Text("${d.phase.label} ${d.percent}%")
+                if (d.phase == DfuPhase.Uploading) OutlinedButton({ s.dfu.cancel() }, Modifier.heightIn(min = TouchHeight)) { Text("Cancel") }
             } else {
                 d.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 d.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 if (d.done) Text("Update installed and confirmed")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ picker.launch(arrayOf("*/*")) }, Modifier.heightIn(min = TouchHeight), enabled = connected) { Text("Update firmware…") }
-                    if (d.image != null) Button({ s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done && block == null) { Text("Install") }
+                    if (d.hasImage) Button({ s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done && block == null) { Text("Install") }
                 }
             }
         }

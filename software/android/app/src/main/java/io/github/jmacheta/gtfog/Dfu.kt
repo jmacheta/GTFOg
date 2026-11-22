@@ -2,17 +2,6 @@ package io.github.jmacheta.gtfog
 
 import android.annotation.SuppressLint
 import android.content.Context
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
 import io.runtime.mcumgr.McuMgrCallback
 import io.runtime.mcumgr.ble.McuMgrBleTransport
 import io.runtime.mcumgr.dfu.FirmwareUpgradeCallback
@@ -22,6 +11,17 @@ import io.runtime.mcumgr.dfu.mcuboot.FirmwareUpgradeManager.State
 import io.runtime.mcumgr.exception.McuMgrException
 import io.runtime.mcumgr.managers.ImageManager
 import io.runtime.mcumgr.response.img.McuMgrImageStateResponse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -90,13 +90,31 @@ fun versionHint(installed: String?, file: String?): String? {
     return "Same version is already installed"
 }
 
+/** Why Install must not start now: [dfuBlockReason], or a file that MCUboot's downgrade prevention would reject; null if allowed. */
+fun installBlockReason(battery: Int?, installed: String?, file: String?): String? = dfuBlockReason(battery) ?: versionHint(installed, file)
+
+/** Where an update is; [label] is the text shown. */
+enum class DfuPhase(val label: String) {
+    Idle(""), Connecting("Connecting"), Validating("Validating"), Uploading("Uploading"),
+    Testing("Testing"), Resetting("Resetting"), Confirming("Confirming"), Done("Done"),
+}
+
+fun phaseOf(state: State) = when (state) {
+    State.VALIDATE -> DfuPhase.Validating
+    State.UPLOAD -> DfuPhase.Uploading
+    State.TEST -> DfuPhase.Testing
+    State.RESET -> DfuPhase.Resetting
+    State.CONFIRM -> DfuPhase.Confirming
+    State.NONE -> DfuPhase.Idle
+}
+
 data class DfuState(
     val installed: String? = null,
     val file: String? = null,
     val fileVersion: String? = null,
-    val image: ByteArray? = null,
+    val hasImage: Boolean = false, // the image bytes are kept in [Dfu], not in this data class
     val running: Boolean = false,
-    val status: String = "",
+    val phase: DfuPhase = DfuPhase.Idle,
     val percent: Int = 0,
     val error: String? = null,
     val detail: String? = null,
@@ -114,6 +132,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     // The mcumgr callbacks run on library threads; the rest runs on the main thread.
     @Volatile private var manager: FirmwareUpgradeManager? = null
     private val refreshing = AtomicBoolean(false)
+    private var image: ByteArray? = null
 
     /** A new connection: the installed version read earlier may belong to other goggles or an older firmware. */
     fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
@@ -157,20 +176,28 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     /** [data] is the file; null with a [problem] text when it could not be read. */
     fun pick(name: String, data: ByteArray?, problem: String = "Cannot read the file") {
         val r = runCatching { loadImage(requireNotNull(data) { problem }) }
+        image = r.getOrNull()
         _state.update {
             it.copy(
-                file = name, image = r.getOrNull(), fileVersion = r.getOrNull()?.let(::parseImageVersion),
+                file = name, hasImage = image != null, fileVersion = r.getOrNull()?.let(::parseImageVersion),
                 error = r.exceptionOrNull()?.message, detail = null, done = false,
             )
         }
     }
 
     fun install() {
-        val image = _state.value.image ?: return
+        val image = image ?: return
         val device = client.currentDevice() ?: return
-        if (_state.value.running) return
-        if (refreshing.get()) { _state.update { it.copy(error = "Still reading the installed version, try again in a moment", detail = null) }; return }
-        dfuBlockReason(client.state.value.battery)?.let { r -> _state.update { it.copy(error = r, detail = null) }; return }
+        val s = _state.value
+        if (s.running) return
+        if (refreshing.get()) {
+            _state.update { it.copy(error = "Still reading the installed version, try again in a moment", detail = null) }
+            return
+        }
+        installBlockReason(client.state.value.battery, s.installed, s.fileVersion)?.let { r ->
+            _state.update { it.copy(error = r, detail = null) }
+            return
+        }
         beforeInstall()
         val t = McuMgrBleTransport(ctx, device)
         fun finish(f: (DfuState) -> DfuState) {
@@ -182,20 +209,12 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
             override fun onUpgradeStarted(controller: FirmwareUpgradeController) {}
 
             override fun onStateChanged(prevState: State, newState: State) {
-                val text = when (newState) {
-                    State.VALIDATE -> "Validating"
-                    State.UPLOAD -> "Uploading"
-                    State.TEST -> "Testing"
-                    State.RESET -> "Resetting"
-                    State.CONFIRM -> "Confirming"
-                    State.NONE -> ""
-                }
-                _state.update { it.copy(status = text) }
+                _state.update { it.copy(phase = phaseOf(newState)) }
             }
 
             override fun onUpgradeCompleted() {
                 // The file's version is not proof: wait for the goggles to be back, then ask them what runs.
-                finish { it.copy(status = "Done", percent = 100, done = true, installed = null) }
+                finish { it.copy(phase = DfuPhase.Done, percent = 100, done = true, installed = null) }
                 refreshWhenBack()
             }
 
@@ -214,7 +233,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
         })
         m.setMode(FirmwareUpgradeManager.Mode.TEST_AND_CONFIRM)
         manager = m
-        _state.update { it.copy(running = true, status = "Connecting", percent = 0, error = null, detail = null, done = false) }
+        _state.update { it.copy(running = true, phase = DfuPhase.Connecting, percent = 0, error = null, detail = null, done = false) }
         runCatching {
             m.start(
                 image,

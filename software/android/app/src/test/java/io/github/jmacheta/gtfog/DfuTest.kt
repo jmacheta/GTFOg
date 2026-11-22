@@ -63,6 +63,15 @@ class DfuTest {
     }
 
     @Test
+    fun installBlockedForEqualOrOlderImageAndLowBattery() {
+        assertEquals("Older than the installed version", installBlockReason(80, "0.3.5", "0.3.4"))
+        assertEquals("Same version is already installed", installBlockReason(80, "0.3.5", "0.3.5"))
+        assertNull(installBlockReason(80, "0.3.5", "0.3.6"))
+        assertNull(installBlockReason(80, null, "0.3.4")) // installed version unknown: not comparable
+        assertEquals("Charge to at least 50 % to update (now 10 %)", installBlockReason(10, "0.3.5", "0.3.4"))
+    }
+
+    @Test
     fun versionHint() {
         assertEquals("Same version is already installed", versionHint("0.3.5", "0.3.5"))
         assertEquals("Same version is already installed", versionHint("0.3.5+7", "0.3.5+7"))

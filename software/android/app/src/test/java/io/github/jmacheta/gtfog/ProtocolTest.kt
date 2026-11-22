@@ -28,6 +28,55 @@ class ProtocolTest {
     }
 
     @Test
+    fun duplicateAndReorderedFramesAreDropped() {
+        val t = SeqTracker()
+        assertEquals(listOf(true, true, false, false, true), listOf(5, 6, 6, 5, 8).map(t::onFrame))
+        assertEquals(3, t.frames)
+        assertEquals(2, t.dropped)
+        assertEquals(1, t.lost)
+        t.reset()
+        assertEquals(0, t.dropped)
+    }
+
+    @Test
+    fun recordingNameGetsASuffixWhenTaken() {
+        assertEquals("a.csv", uniqueCsvName("a") { false })
+        assertEquals("a_1.csv", uniqueCsvName("a") { it == "a.csv" })
+        assertEquals("a_2.csv", uniqueCsvName("a") { it == "a.csv" || it == "a_1.csv" })
+    }
+
+    @Test
+    fun nextToState() {
+        val up = DeviceState(Conn.Connected, "GTFOg", "AA", battery = 80)
+        assertEquals(Conn.Reconnecting, up.afterLost(Next.Reconnect, "x").conn)
+        assertEquals(80, up.afterLost(Next.Reconnect, "x").battery)
+        assertEquals(up, up.afterLost(Next.RetryFirst, "x"))
+        for (n in listOf(Next.GiveUp, Next.NotGtfog, Next.AuthFailed)) {
+            assertEquals(DeviceState(error = "x"), up.afterLost(n, "x"))
+        }
+        assertTrue(keepsTrying(Next.Reconnect) && keepsTrying(Next.RetryFirst))
+        assertFalse(keepsTrying(Next.GiveUp) || keepsTrying(Next.NotGtfog) || keepsTrying(Next.AuthFailed))
+    }
+
+    @Test
+    fun valuesUpdateState() {
+        val s = DeviceState()
+        assertEquals(42, s.withValue(Uuids.FAN, byteArrayOf(42), false).fan)
+        assertEquals(s, s.withValue(Uuids.FAN, byteArrayOf(42), true)) // a write is pending
+        assertEquals(true, s.withValue(Uuids.STROBE, byteArrayOf(1), false).strobe)
+        assertEquals(1, s.withValue(Uuids.CHARGER, byteArrayOf(1), false).charger)
+        assertEquals(77, s.withValue(Uuids.BATTERY, byteArrayOf(77), false).battery)
+        assertEquals("M1", s.withValue(Uuids.MODEL, "M1".toByteArray(), false).model)
+        assertEquals("ACME", s.withValue(Uuids.MANUFACTURER, "ACME".toByteArray(), false).manufacturer)
+        val a = s.withValue(Uuids.FAN_ACTUAL, byteArrayOf(30, 1), false)
+        assertEquals(30, a.fanActual)
+        assertEquals(1, a.activity)
+        assertEquals(s, s.withValue(Uuids.FAN, byteArrayOf(), false))
+        assertEquals(s, s.withValue(Uuids.SETTINGS, byteArrayOf(1, 2, 3), false)) // malformed
+        assertEquals(true, s.withValue(Uuids.SETTINGS, byteArrayOf(1, 0), false).settings?.stealth)
+    }
+
+    @Test
     fun emptyFrameIsValid() {
         assertEquals(0, parseAccelFrame(le16(5) + byteArrayOf(100, 0))!!.samples.size)
     }

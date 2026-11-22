@@ -54,7 +54,7 @@ private val TABS = listOf("Control", "Settings", "Debug")
 fun Conn.text() = when (this) {
     Conn.Connecting -> "Connecting…"
     Conn.Connected -> "Connected"
-    Conn.Reconnecting -> "Out of range — reconnecting…"
+    Conn.Reconnecting -> "Waiting for the goggles, reconnecting…"
     else -> "Disconnected"
 }
 

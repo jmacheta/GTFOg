@@ -94,14 +94,17 @@ private fun AccelCard(s: Session, st: DeviceState) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val canLive = st.conn == Conn.Connected && !dfu.running
+            val canToggle = canLive && !rec.active // switching Live off would leave a recording with no data
             Row(
-                Modifier.toggleable(st.live, canLive, Role.Switch) { s.setLive(it) }.heightIn(min = TouchHeight),
+                Modifier.toggleable(st.live, canToggle, Role.Switch) { s.setLive(it) }.heightIn(min = TouchHeight),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Accelerometer", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                 Text("Live  ")
-                Switch(st.live, null, enabled = canLive)
+                Switch(st.live, null, enabled = canToggle)
             }
+            if (rec.active) Text("Live stays on while recording. Stop the recording first.", style = MaterialTheme.typography.bodySmall)
+            st.streamError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             st.mtu?.takeIf { it < 247 }?.let {
                 Text("ATT MTU is $it (247 needed): accelerometer frames may be cut.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }

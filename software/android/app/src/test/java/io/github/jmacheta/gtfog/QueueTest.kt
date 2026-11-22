@@ -116,6 +116,17 @@ class QueueTest {
     }
 
     @Test
+    fun lateAnswerThatNeverComesDoesNotSwallowALaterGenuineOne() {
+        q.enqueue(Op({ log += "run a1"; true }, { log += "end a1 $it" }, "a"))
+        timer.advance(5_000) // a1 timed out
+        timer.advance(5_000) // the late answer did not come within one more timeout
+        q.enqueue(Op({ log += "run a2"; true }, { log += "end a2 $it" }, "a"))
+        q.finish(0, "a")
+        assertEquals("end a2 0", log.last())
+        assertFalse(q.busy)
+    }
+
+    @Test
     fun cccdKeyDoesNotMatchCharacteristicKey() {
         q.enqueue(Op({ true }, { log += "end $it" }, "cccd fan"))
         q.finish(0, "fan")

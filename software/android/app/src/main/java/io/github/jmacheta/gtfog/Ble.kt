@@ -60,6 +60,8 @@ data class DeviceState(
     val noticeSeq: Int = 0,
     /** The bond with the goggles is bad: [error] says what to do, the UI offers the Bluetooth settings. */
     val bondProblem: Boolean = false,
+    /** Notifications could not be enabled (after the retries); shown in the Debug tab. */
+    val streamError: String? = null,
 )
 
 private fun charName(u: UUID) = when (u) {
@@ -214,17 +216,8 @@ class GtfogClient(
     }
 
     private fun act(next: Next, message: String) {
-        when (next) {
-            Next.Reconnect -> {
-                _state.update { it.copy(conn = Conn.Reconnecting, error = null) }
-                handler.postDelayed(reopen, backoff.next())
-            }
-            Next.RetryFirst -> handler.postDelayed(reopen, backoff.next()) // still "Connecting"
-            else -> {
-                wantConnected = false
-                _state.value = DeviceState(error = message)
-            }
-        }
+        _state.update { it.afterLost(next, message) }
+        if (keepsTrying(next)) handler.postDelayed(reopen, backoff.next()) else wantConnected = false
     }
 
     /**
@@ -265,7 +258,7 @@ class GtfogClient(
 
     fun setLive(on: Boolean) {
         live = on
-        _state.update { it.copy(live = on) }
+        _state.update { it.copy(live = on, streamError = if (on) null else it.streamError) }
         if (_state.value.conn == Conn.Connected) notify(Uuids.ACCEL, on)
     }
 
@@ -329,9 +322,15 @@ class GtfogClient(
         val c = chars[u] ?: return
         gatt?.setCharacteristicNotification(c, on)
         val d = c.getDescriptor(Uuids.CCCD) ?: return
-        enqueue(cccdKey(u)) {
+        enqueue(cccdKey(u), { status -> if (status != 0 && on) subscribeFailed(u) }) {
             writeDescriptor(d, if (on) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
         }
+    }
+
+    private fun subscribeFailed(u: UUID) {
+        if (u == Uuids.ACCEL) live = false // no stream will come: Live goes back off
+        val text = if (u == Uuids.ACCEL) "Could not start the accelerometer stream" else "Could not enable notifications; values may not update"
+        _state.update { it.copy(live = it.live && u != Uuids.ACCEL, streamError = text) }
     }
 
     private fun cccdKey(u: UUID) = "cccd $u"
@@ -342,7 +341,7 @@ class GtfogClient(
         policy.ready()
         up = false
         backoff.reset()
-        _state.update { it.copy(conn = Conn.Connected, error = null) }
+        _state.update { it.copy(conn = Conn.Connected, error = null, streamError = null) }
         listOf(Uuids.FAN, Uuids.FAN_ACTUAL, Uuids.STROBE, Uuids.CHARGER, Uuids.BATTERY, Uuids.SETTINGS).forEach { notify(it, true) }
         if (live) notify(Uuids.ACCEL, true)
         _state.update { it.copy(hasSettings = Uuids.SETTINGS in chars) }
@@ -355,25 +354,7 @@ class GtfogClient(
             parseAccelFrame(v)?.let { onFrame(System.currentTimeMillis(), it) }
             return
         }
-        if (pendingWrites.has(u)) return
-        if (u == Uuids.SETTINGS) {
-            parseSettings(v)?.let { s -> _state.update { it.copy(settings = s) } }
-            return
-        }
-        if (v.isEmpty()) return
-        val b = v[0].toInt() and 0xFF
-        _state.update {
-            when (u) {
-                Uuids.FAN -> it.copy(fan = b)
-                Uuids.FAN_ACTUAL -> parseFanActual(v)?.let { a -> it.copy(fanActual = a.percent, activity = a.level) } ?: it
-                Uuids.STROBE -> it.copy(strobe = b != 0)
-                Uuids.CHARGER -> it.copy(charger = b)
-                Uuids.BATTERY -> it.copy(battery = b)
-                Uuids.MODEL -> it.copy(model = v.decodeToString())
-                Uuids.MANUFACTURER -> it.copy(manufacturer = v.decodeToString())
-                else -> it
-            }
-        }
+        _state.update { it.withValue(u, v, pendingWrites.has(u)) }
     }
 
     private val callback = object : BluetoothGattCallback() {
