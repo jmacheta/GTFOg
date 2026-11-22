@@ -55,6 +55,7 @@ class Session(private val app: Application) {
     val recordings = MutableStateFlow<List<File>>(emptyList())
     val scanning = MutableStateFlow(false)
     val scanError = MutableStateFlow<String?>(null)
+    val recError = MutableStateFlow<String?>(null)
     private val prefs = app.getSharedPreferences("gtfog", Context.MODE_PRIVATE)
     private val handler = Handler(Looper.getMainLooper())
     private val scanTimeout = Runnable { stopScan() }
@@ -66,7 +67,7 @@ class Session(private val app: Application) {
 
     private val tracker = SeqTracker()
     private val io = Executors.newSingleThreadExecutor()
-    private var writer: BufferedWriter? = null
+    private var writer: BufferedWriter? = null // only touched on the io thread
     private val found = LinkedHashMap<String, ScanItem>()
 
     val dir: File
@@ -115,6 +116,7 @@ class Session(private val app: Application) {
         prefs.edit().putString("last", item.address).apply()
         tracker.reset()
         stats.value = Stats()
+        dfu.forget()
         client.connect(item.device, item.label)
     }
 
@@ -148,29 +150,41 @@ class Session(private val app: Application) {
     }
 
     private fun write(text: String) {
-        val w = writer ?: return
-        io.execute { runCatching { w.write(text); w.flush() } }
+        io.execute { writer?.let { w -> runCatching { w.write(text); w.flush() }.onFailure(::recordingFailed) } }
+    }
+
+    private fun recordingFailed(e: Throwable) {
+        handler.post {
+            recError.value = "Recording failed: ${e.message ?: e.javaClass.simpleName}"
+            stopRecording()
+        }
     }
 
     fun startRecording() {
         if (rec.value.active) return
         val now = Date()
         val name = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now) + ".csv"
-        writer = File(dir, name).bufferedWriter()
+        recError.value = null
+        // Opened on the io thread, before the first write queued after it; a full or missing storage ends here, not in a crash.
+        io.execute {
+            runCatching { writer = File(dir, name).bufferedWriter() }.onFailure(::recordingFailed)
+        }
         val d = client.state.value
         val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=100 Hz"
         write(csvPreamble(ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME), info))
         rec.value = RecState(name, now.time, 0, 0, true)
         if (!d.live) setLive(true)
-        ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java))
+        // The service starts only once the file exists.
+        io.execute { if (writer != null) handler.post { if (rec.value.active) ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java)) } }
         refreshRecordings()
     }
 
     fun stopRecording() {
         if (!rec.value.active) return
-        val w = writer
-        writer = null
-        io.execute { runCatching { w?.close() } }
+        io.execute {
+            runCatching { writer?.close() }
+            writer = null
+        }
         rec.update { it.copy(active = false, endMs = System.currentTimeMillis()) }
         refreshRecordings()
     }

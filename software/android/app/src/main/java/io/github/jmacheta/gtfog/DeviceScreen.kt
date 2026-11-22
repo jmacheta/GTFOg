@@ -1,5 +1,6 @@
 package io.github.jmacheta.gtfog
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,10 +22,16 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,7 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private val TABS = listOf("Control", "Settings", "Debug")
 
-private fun Conn.text() = when (this) {
+fun Conn.text() = when (this) {
     Conn.Connecting -> "Connecting…"
     Conn.Connected -> "Connected"
     Conn.Reconnecting -> "Out of range — reconnecting…"
@@ -48,7 +56,27 @@ private fun Conn.text() = when (this) {
 @Composable
 fun DeviceScreen(s: Session, st: DeviceState) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
     val dfu by s.dfu.state.collectAsStateWithLifecycle()
+    val rec by s.rec.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    // Leaving mid-update is not allowed (Back, Disconnect); on another tab Back goes to Control first.
+    BackHandler(dfu.running || tab != 0) { if (!dfu.running) tab = 0 }
+    st.notice?.let { n ->
+        LaunchedEffect(n) {
+            snackbar.showSnackbar(n)
+            s.client.clearNotice()
+        }
+    }
+    if (confirmDisconnect) {
+        AlertDialog(
+            onDismissRequest = { confirmDisconnect = false },
+            title = { Text("Stop recording and disconnect?") },
+            text = { Text("The recording ${rec.file} ends now.") },
+            confirmButton = { TextButton({ confirmDisconnect = false; s.disconnect() }) { Text("Disconnect") } },
+            dismissButton = { TextButton({ confirmDisconnect = false }) { Text("Keep recording") } },
+        )
+    }
     // The Debug tab (recordings) and a running firmware update stay usable while the link is down.
     val offline = st.conn != Conn.Connected && tab != 2 && !(tab == 1 && dfu.running)
     Scaffold(
@@ -58,7 +86,10 @@ fun DeviceScreen(s: Session, st: DeviceState) {
                     Text(st.name, style = MaterialTheme.typography.headlineSmall)
                     Text(st.conn.text(), style = MaterialTheme.typography.bodySmall)
                 }
-                OutlinedButton({ s.disconnect() }, Modifier.heightIn(min = TouchHeight)) { Text("Disconnect") }
+                OutlinedButton(
+                    { if (rec.active) confirmDisconnect = true else s.disconnect() },
+                    Modifier.heightIn(min = TouchHeight), enabled = !dfu.running,
+                ) { Text("Disconnect") }
             }
         },
         bottomBar = {
@@ -68,6 +99,7 @@ fun DeviceScreen(s: Session, st: DeviceState) {
                 }
             }
         },
+        snackbarHost = { SnackbarHost(snackbar) },
         contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(

@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -56,6 +58,21 @@ fun loadImage(data: ByteArray): ByteArray {
     return bin
 }
 
+private fun versionParts(v: String): List<Long>? =
+    Regex("""(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?""").matchEntire(v)?.groupValues?.drop(1)?.map { it.toLongOrNull() ?: 0L }
+
+/** Hint when the file is not newer than what runs on the device; null if newer or not comparable. */
+fun versionHint(installed: String?, file: String?): String? {
+    val a = versionParts(installed ?: return null) ?: return null
+    val b = versionParts(file ?: return null) ?: return null
+    for (i in 0 until 4) {
+        val d = a[i].compareTo(b[i])
+        if (d > 0) return "Older than the installed version"
+        if (d < 0) return null
+    }
+    return "Same version is already installed"
+}
+
 data class DfuState(
     val installed: String? = null,
     val file: String? = null,
@@ -67,6 +84,7 @@ data class DfuState(
     val error: String? = null,
     val detail: String? = null,
     val done: Boolean = false,
+    val refreshError: String? = null,
 )
 
 /** Firmware update over mcumgr SMP (nRF Connect Device Manager library) on a second GATT link to the connected device. */
@@ -75,28 +93,45 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
     private val _state = MutableStateFlow(DfuState())
     val state: StateFlow<DfuState> = _state
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var manager: FirmwareUpgradeManager? = null
 
-    /** Reads the version of slot 0 from the device. */
+    // The mcumgr callbacks run on library threads; the rest runs on the main thread.
+    @Volatile private var manager: FirmwareUpgradeManager? = null
+    @Volatile private var refreshing = false
+
+    /** A new connection: the installed version read earlier may belong to other goggles or an older firmware. */
+    fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
+
+    /** Reads the version of slot 0 from the device (one read at a time; the error is shown in the card). */
     fun refresh() {
         val device = client.currentDevice() ?: return
-        if (_state.value.running) return
+        if (_state.value.running || refreshing) return
+        refreshing = true
         val t = McuMgrBleTransport(ctx, device)
+        var timeout: Job? = null
+        fun done(f: (DfuState) -> DfuState) {
+            timeout?.cancel()
+            if (!refreshing) return // answered or timed out already
+            refreshing = false
+            t.release()
+            _state.update(f)
+        }
+        timeout = scope.launch {
+            delay(30_000)
+            done { it.copy(refreshError = "no answer") }
+        }
         ImageManager(t).list(object : McuMgrCallback<McuMgrImageStateResponse> {
             override fun onResponse(response: McuMgrImageStateResponse) {
                 val v = response.images?.firstOrNull { it.image == 0 && it.slot == 0 }?.version
-                _state.update { it.copy(installed = v) }
-                t.release()
+                done { it.copy(installed = v, refreshError = if (v == null) "no image in slot 0" else null) }
             }
 
-            override fun onError(error: McuMgrException) {
-                t.release()
-            }
+            override fun onError(error: McuMgrException) = done { it.copy(refreshError = error.message ?: "error") }
         })
     }
 
-    fun pick(name: String, data: ByteArray?) {
-        val r = runCatching { loadImage(requireNotNull(data) { "Cannot read the file" }) }
+    /** [data] is the file; null with a [problem] text when it could not be read. */
+    fun pick(name: String, data: ByteArray?, problem: String = "Cannot read the file") {
+        val r = runCatching { loadImage(requireNotNull(data) { problem }) }
         _state.update {
             it.copy(
                 file = name, image = r.getOrNull(), fileVersion = r.getOrNull()?.let(::parseImageVersion),
@@ -109,6 +144,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
         val image = _state.value.image ?: return
         val device = client.currentDevice() ?: return
         if (_state.value.running) return
+        dfuBlockReason(client.state.value.battery)?.let { r -> _state.update { it.copy(error = r, detail = null) }; return }
         val t = McuMgrBleTransport(ctx, device)
         fun finish(f: (DfuState) -> DfuState) {
             t.release()

@@ -63,14 +63,14 @@ class RecordService : Service() {
     private fun notification(): Notification {
         val r = session.rec.value
         val lost = session.stats.value.lost
-        val state = session.client.state.value.conn.name
+        val state = session.client.state.value.conn.text()
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(
             this, 1, Intent(this, RecordService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("Recording $state ${formatDuration(session.rec.durationMs)}")
+            .setContentTitle("Recording (${state}) ${formatDuration(session.rec.durationMs)}")
             .setContentText("${r.samples} samples, ${lost} lost frames")
             .setContentIntent(open)
             .setOngoing(true)

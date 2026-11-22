@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.jmacheta.gtfog"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
     // Release signing only when the keystore is given as Gradle properties (gtfog.storeFile, ...); never in the repo.
     val storeFile = providers.gradleProperty("gtfog.storeFile").orNull
@@ -34,6 +34,10 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
+    }
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
     }
     buildFeatures {
         compose = true

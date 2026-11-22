@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -17,15 +18,17 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 private val AUTO_OFF = listOf("Off" to 0, "5 min" to 5, "10 min" to 10, "15 min" to 15, "30 min" to 30, "60 min" to 60)
 private val FAN_STEPS = listOf("1 %" to 1, "2 %" to 2, "5 %" to 5, "10 %" to 10, "20 %" to 20)
@@ -78,15 +81,13 @@ fun SettingsTab(s: Session, st: DeviceState) {
 private fun FirmwareCard(s: Session, st: DeviceState) {
     val d by s.dfu.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
-    val view = LocalView.current
+    val scope = rememberCoroutineScope()
     val connected = st.conn == Conn.Connected
-    LaunchedEffect(connected) { if (connected) s.dfu.refresh() }
-    DisposableEffect(d.running) {
-        view.keepScreenOn = d.running
-        onDispose { view.keepScreenOn = false }
-    }
+    val block = dfuBlockReason(st.battery)
+    // Not right after an update: Dfu reads the version itself once the goggles are back.
+    LaunchedEffect(connected, d.installed == null, d.done) { if (connected && d.installed == null && !d.done) s.dfu.refresh() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+        if (uri != null) scope.launch(Dispatchers.IO) { // up to 4 MB: not on the main thread
             var name = uri.lastPathSegment ?: "file"
             var size = 0L
             ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
@@ -95,16 +96,23 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
                     c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
                 }
             }
-            val bytes = if (size > 4_000_000) null else runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            s.dfu.pick(name, bytes)
+            val tooLarge = size > 4_000_000
+            val bytes = if (tooLarge) null else runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            s.dfu.pick(name, bytes, if (tooLarge) "File too large (over 4 MB)" else "Cannot read the file")
         }
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Firmware", style = MaterialTheme.typography.titleMedium)
-            Text("Installed version: ${d.installed ?: if (d.done) "reading from the goggles…" else "-"}")
+            Text(
+                "Installed version: " + (d.installed ?: if (d.done) "reading from the goggles…" else "-") +
+                    (if (d.installed == null && d.refreshError != null) " (could not read: ${d.refreshError})" else ""),
+            )
             if (d.file != null) Text("File: ${d.file}" + (d.fileVersion?.let { " (version $it)" } ?: ""))
+            versionHint(d.installed, d.fileVersion)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            if (d.image != null && !d.running && block != null) Text(block, color = MaterialTheme.colorScheme.error)
             if (d.running) {
+                Text("Keep the app open and the phone near the goggles until the update is done.")
                 LinearProgressIndicator(progress = { d.percent / 100f }, Modifier.fillMaxWidth())
                 Text("${d.status} ${d.percent}%")
                 if (d.status == "Uploading") OutlinedButton({ s.dfu.cancel() }, Modifier.heightIn(min = TouchHeight)) { Text("Cancel") }
@@ -114,7 +122,7 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
                 if (d.done) Text("Update installed and confirmed")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ picker.launch(arrayOf("*/*")) }, Modifier.heightIn(min = TouchHeight), enabled = connected) { Text("Update firmware…") }
-                    if (d.image != null) Button({ s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done) { Text("Install") }
+                    if (d.image != null) Button({ s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done && block == null) { Text("Install") }
                 }
             }
         }
@@ -123,11 +131,14 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
 
 @Composable
 private fun SettingSwitch(title: String, subtitle: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.toggleable(on, enabled, Role.Switch, onValueChange = onChange).heightIn(min = TouchHeight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(subtitle, style = MaterialTheme.typography.bodySmall)
         }
-        Switch(on, onChange, enabled = enabled)
+        Switch(on, null, enabled = enabled)
     }
 }

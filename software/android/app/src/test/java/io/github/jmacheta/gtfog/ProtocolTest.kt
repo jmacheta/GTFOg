@@ -3,6 +3,9 @@ package io.github.jmacheta.gtfog
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ProtocolTest {
@@ -172,4 +175,29 @@ class ProtocolTest {
         assertEquals("Could not connect, try again", gattErrorText(133))
         assertEquals("Connection failed (status 7)", gattErrorText(7))
     }
+
+    @Test
+    fun settingsOutOfRangeAreClamped() {
+        val s = parseSettings(byteArrayOf(0, 5, 0, 1, 0, 101, 120, -1))!!
+        assertEquals(1, s.fanStep)
+        assertEquals(5, s.motionDelayS)
+        assertEquals(listOf(100, 100, 100), s.motionSpeeds)
+        assertEquals(25, parseSettings(byteArrayOf(0, 5, 99, 0, 60, 1, 1, 1))!!.fanStep)
+    }
+
+    @Test
+    fun dfuBatteryGate() {
+        assertNotNull(dfuBlockReason(49))
+        assertNull(dfuBlockReason(50))
+        assertNull(dfuBlockReason(100))
+        assertNotNull(dfuBlockReason(null))
+        assertEquals("Charge to at least 50 % to update (now 49 %)", dfuBlockReason(49))
+    }
+
+    @Test
+    fun authFailureStatuses() {
+        assertTrue(listOf(5, 15, 137).all(::isAuthFailure))
+        assertFalse(isAuthFailure(133))
+    }
 }
+

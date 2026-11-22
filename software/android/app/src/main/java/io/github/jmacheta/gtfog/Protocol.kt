@@ -84,7 +84,11 @@ fun parseSettings(b: ByteArray): DeviceSettings? {
     val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = b.size)
     if (b.size == 2) return base
     val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < b.size) u8(b, 5 + i) else default }
-    return base.copy(fanStep = u8(b, 2), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4), motionSpeeds = speeds)
+    // Corrupt or future firmware: keep the values in the ranges the UI and stepFan can work with.
+    return base.copy(
+        fanStep = u8(b, 2).coerceIn(1, 25), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4).coerceIn(5, 255),
+        motionSpeeds = speeds.map { it.coerceIn(0, 100) },
+    )
 }
 
 /** Fan speed in % and activity level (0 still, 1 walking, 2 running; null in manual mode or from old firmware). */
@@ -105,6 +109,15 @@ fun batteryDescription(level: Int?, charger: Int?): String = when {
     level == null -> "Battery level unknown"
     charger == 1 -> "Battery $level %, charging"
     else -> "Battery $level %"
+}
+
+const val DFU_MIN_BATTERY = 50
+
+/** Why a firmware update must not start now (a flat battery during the swap is the risk); null if allowed. */
+fun dfuBlockReason(battery: Int?): String? = when {
+    battery == null -> "Charge to at least $DFU_MIN_BATTERY % to update (battery level unknown)"
+    battery < DFU_MIN_BATTERY -> "Charge to at least $DFU_MIN_BATTERY % to update (now $battery %)"
+    else -> null
 }
 
 /** Human-readable text for a BluetoothGatt connection status. */

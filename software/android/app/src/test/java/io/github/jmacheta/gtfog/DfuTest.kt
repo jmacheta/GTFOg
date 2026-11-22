@@ -54,4 +54,16 @@ class DfuTest {
         assertThrows(IllegalArgumentException::class.java) { loadImage(zip("a.bin" to i, "b.bin" to i)) }
         assertThrows(IllegalArgumentException::class.java) { loadImage(zip("a.bin" to ByteArray(64))) }
     }
+
+    @Test
+    fun versionHint() {
+        assertEquals("Same version is already installed", versionHint("0.3.5", "0.3.5"))
+        assertEquals("Same version is already installed", versionHint("0.3.5+7", "0.3.5+7"))
+        assertEquals("Older than the installed version", versionHint("0.3.5", "0.3.4"))
+        assertEquals("Older than the installed version", versionHint("1.0.0", "0.9.9"))
+        assertEquals("Older than the installed version", versionHint("0.3.5+9", "0.3.5+2"))
+        assertNull(versionHint("0.3.5", "0.3.6"))
+        assertNull(versionHint(null, "0.3.6"))
+        assertNull(versionHint("0.3.5", null))
+    }
 }

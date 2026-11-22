@@ -44,6 +44,14 @@ private val LEVEL_SPEEDS = listOf("Stop" to 0) + (1..10).map { "${it * 10} %" to
 
 @Composable
 fun ControlTab(s: Session, st: DeviceState) {
+    if (st.settings?.transportLock == true) {
+        Card(Modifier.fillMaxWidth()) {
+            Text(
+                "Transport lock is on: the fan and strobe stay off. Unlock on the goggles: press + three times quickly.",
+                Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
     BatteryWidget(st.battery, st.charger)
     FanCard(s, st)
     StrobeCard(s, st)
