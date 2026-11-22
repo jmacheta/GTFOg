@@ -251,6 +251,22 @@ void notify_settings(k_work *) {
 }
 K_WORK_DEFINE(notify_settings_work, notify_settings);
 
+// The battery thread feeds the watchdog, so it hands its notifications to the system workqueue: there Zephyr does not
+// wait for a free ATT buffer (elsewhere it waits forever, e.g. while the accelerometer stream fills a slow link).
+// A dropped notification is fine: the phone reads both values after connecting and the next sample sends them again.
+std::atomic<std::uint8_t> battery_percent{100};
+
+void notify_battery(k_work *) {
+  std::ignore = bt_bas_set_battery_level(battery_percent); // Only fails for a value above 100.
+}
+K_WORK_DEFINE(notify_battery_work, notify_battery);
+
+void notify_charger(k_work *) {
+  std::uint8_t value = charger;
+  std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[charger_value], &value, sizeof(value)); // Fails only when nobody listens.
+}
+K_WORK_DEFINE(notify_charger_work, notify_charger);
+
 // Remembers that a refused pairing needs a status LED signal; the work takes the controller mutex, the Bluetooth callback must not.
 void report_pairing_refused(k_work *) {
   with_controller([](gtfog::controller &control) { control.report(gtfog::signal::pairing_refused); });
@@ -372,15 +388,16 @@ void ble_settings_flush() {
 }
 
 void ble_battery_changed(std::uint8_t percent) {
+  battery_percent = percent;
   if(bt_is_ready()) {
-    std::ignore = bt_bas_set_battery_level(percent); // Only fails for a value above 100; the next sample retries.
+    k_work_submit(&notify_battery_work);
   }
 }
 
 void ble_charger_changed(charger_state state) {
   auto value = static_cast<std::uint8_t>(state);
   if(charger.exchange(value) != value && bt_is_ready()) {
-    std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[charger_value], &value, sizeof(value)); // Fails only when nobody listens.
+    k_work_submit(&notify_charger_work);
   }
 }
 
@@ -389,7 +406,8 @@ auto ble_accelerometer_samples_per_packet() -> std::size_t {
 }
 
 void ble_accelerometer_send(std::span<std::uint8_t const> packet) {
-  // A full buffer drops the packet; the sequence number shows the gap to the phone.
+  // Waits for a free ATT buffer (this is not the system workqueue); a failed send drops the packet and the sequence number
+  // shows the gap to the phone.
   std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[accelerometer_value], packet.data(), static_cast<std::uint16_t>(packet.size()));
 }
 

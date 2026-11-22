@@ -22,7 +22,7 @@ Board layer (`src/`):
 | `include/app.hpp` | `with_controller(f)`: runs `f(controller &)` under a mutex; declarations shared by the board files |
 | `board.cpp` | `board_outputs` (implements `outputs`): PWM fan, PWM strobe and RGB LED patterns (`k_work`), System OFF; owns the `controller` |
 | `buttons.cpp` | Button GPIO interrupts, `buttons` thread feeding `button_gestures`, wake-up arming |
-| `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog (right after the controller mutex section, before the BLE notifications); `battery_sample()` for the boot check |
+| `battery.cpp` | `battery` thread: samples VBAT and the charger STAT pins every 10 s, counts the auto-off time from `k_uptime_get` (also when the ADC fails) and feeds the watchdog (right after the controller mutex section); its battery and charger notifications go to the system workqueue, so it never waits for a Bluetooth buffer; `battery_sample()` for the boot check |
 | `ble.cpp` | Advertising, GATT control service, Battery Service, Device Information Service (the mcumgr SMP service comes from NCS) |
 | `rf_test.cpp` | `rf_test` thread: the RF carrier test (see [RF carrier test](#rf-carrier-test)) |
 | `accelerometer.cpp` | `accelerometer` thread: powers the ADXL345 only while a phone streams or motion mode is on (the thread owns the power pin); feeds the activity classifier and the stream; power-cycles a silent sensor |
@@ -38,8 +38,8 @@ Board layer (`src/`):
 | `rf_test` | 6 | 2048 B | Sleeps until a phone writes the RF test characteristic, then runs the carrier test and reboots |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
-The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
-(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 2048 B because power-off (flash save) runs in them.
+The strobe, the LED patterns, BLE notifications (all but the accelerometer stream), saving the settings and the advertising restart run on the system workqueue
+(2048 B stack). There Zephyr does not wait for a free ATT buffer and drops the notification instead; any other thread waits for one, as long as the link is stalled. Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 2048 B because power-off (flash save) runs in them.
 
 ## Controller
 
@@ -208,8 +208,8 @@ The thread owns the power pin: `accelerometer_power_off()` sets a shutdown flag,
 drive the pin low, then drives it low itself.
 
 Notification frame (little endian, `pack_accelerometer_samples`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
-then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accelerometer_samples_per_packet`). A full
-controller buffer drops a packet; a gap in `seq` shows it.
+then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accelerometer_samples_per_packet`). The
+`accelerometer` thread waits for a free ATT buffer; a failed send drops the packet and a gap in `seq` shows it.
 
 ## RF carrier test
 
@@ -238,7 +238,7 @@ controller mutex, so a stuck controller mutex or a dead `battery` thread resets 
 USB in the application is gone; on the board USB is for charging, except for the MCUboot recovery below.
 
 - Flash map (`gtfog.dts`): see [hardware.md](hardware.md#flash-map). MCUboot mode is sysbuild
-  `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with revert, no scratch partition) with downgrade prevention.
+  `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with revert, no scratch partition), without downgrade prevention: an older image can be installed on purpose (the app asks first).
 - Update over Bluetooth: mcumgr SMP (`CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU`) into slot 1. The link must be encrypted
   (`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT`), so pair first.
 - Update with `smpmgr` (`pip install smpmgr`):
@@ -252,8 +252,9 @@ smpmgr --ble <address> os reset
   `smpmgr upgrade` uploads and resets but does not mark the image, so it does not install it.
 - Revert: after the swap the new image runs unconfirmed. `main()` confirms it (`boot_write_img_confirmed`, helper
   `confirm_image`) only when Bluetooth initialized, and either at the end of `main()` (after the battery thread and the watchdog had 1 s to start) or, when the boot battery check finds the cell too low and `check_start` is about to power off, right before that power off, so a low-battery boot does not revert a good update. An unconfirmed image is reverted by MCUboot on the next reset.
-- The image version comes from `software/firmware/VERSION`. Downgrade prevention rejects an older or equal
-  image, so raise it for every update.
+- The image version comes from `software/firmware/VERSION`; raise it for every update. MCUboot installs any validly
+  signed image, older ones too. Boards whose MCUboot was built with downgrade prevention need the new MCUboot over SWD
+  once (an update over Bluetooth replaces only the application).
 - Recovery: MCUboot has serial recovery over USB CDC ACM (mcumgr protocol, VID:PID `1209:EACD`, manufacturer
   `elmaczete_customs`, product `GTFOg bootloader`). Hold the plus button for more than 1 s (`CONFIG_BOOT_SERIAL_DETECT_DELAY=1000`, so a normal press that wakes the device does not enter recovery) while the device wakes or is plugged in (devicetree
   alias `mcuboot-button0` = `button_plus` in `sysbuild/mcuboot.overlay`), then

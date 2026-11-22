@@ -11,7 +11,7 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
   exceptions, no RTTI.
 - **Safe in the field.** The fan and strobe never depend on a radio or a phone: manual control works without BLE.
   Power-off by both buttons is reachable from every state.
-- **Updatable.** The image is signed and swapped by MCUboot (swap with revert, downgrade prevention); updates go over Bluetooth, and the image confirms itself only once Bluetooth
+- **Updatable.** The image is signed and swapped by MCUboot (swap with revert; an older image is allowed after the app asks); updates go over Bluetooth, and the image confirms itself only once Bluetooth
   works (at the end of `main`, or right before a low-battery power off at boot).
 
 ## Structure

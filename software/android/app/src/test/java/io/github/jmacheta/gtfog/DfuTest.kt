@@ -3,6 +3,7 @@ package io.github.jmacheta.gtfog
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -64,12 +65,9 @@ class DfuTest {
     }
 
     @Test
-    fun installBlockedForEqualOrOlderImageAndLowBattery() {
-        assertEquals("Older than the installed version", installBlockReason(80, "0.3.5", "0.3.4"))
-        assertEquals("Same version is already installed", installBlockReason(80, "0.3.5", "0.3.5"))
-        assertNull(installBlockReason(80, "0.3.5", "0.3.6"))
-        assertNull(installBlockReason(80, null, "0.3.4")) // installed version unknown: not comparable
-        assertEquals("Charge to at least 50 % to update (now 10 %)", installBlockReason(10, "0.3.5", "0.3.4"))
+    fun downgradeAskedNotBlocked() {
+        assertTrue(downgradeQuestion("Older than the installed version").startsWith("Older than the installed version. "))
+        assertNull(dfuBlockReason(80)) // an older file is not blocked: only the battery is
     }
 
     @Test

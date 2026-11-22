@@ -6,7 +6,7 @@
 - Board `gtfog`, qualifier `gtfog/nrf52833` (Zephyr HWMv2). The board root is `software`.
 - C++23 (`CONFIG_STD_CPP23`).
 - Sysbuild with MCUboot: `sysbuild.conf` has `SB_CONFIG_BOOTLOADER_MCUBOOT=y`; sets `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with
-  revert). `sysbuild/mcuboot.conf` selects downgrade prevention, no logging, the synthesized 32 kHz clock, the status
+  revert). `sysbuild/mcuboot.conf` selects no downgrade prevention (the app asks before an older image), no logging, the synthesized 32 kHz clock, the status
   hooks and USB serial recovery (CDC ACM, legacy USB device stack); `sysbuild/mcuboot.overlay` sets the recovery button
   (`mcuboot-button0` = plus) and the CDC ACM device.
 

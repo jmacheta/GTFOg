@@ -21,6 +21,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -89,7 +94,18 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val connected = st.conn == Conn.Connected
-    val block = installBlockReason(st.battery, d.installed, d.fileVersion)
+    val block = dfuBlockReason(st.battery)
+    val hint = versionHint(d.installed, d.fileVersion) // Not newer: allowed after a question.
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    if (confirm && hint != null) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Install this version?") },
+            text = { Text(downgradeQuestion(hint)) },
+            confirmButton = { TextButton({ confirm = false; s.dfu.install() }) { Text("Install anyway") } },
+            dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } },
+        )
+    }
     // Reads are serialised in Dfu, so this may overlap its own read after an update.
     LaunchedEffect(connected, d.installed == null, d.done) { if (connected && d.installed == null) s.dfu.refresh() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -117,6 +133,7 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
             Text(version + if (d.installed == null && d.refreshError != null) " (could not read: ${d.refreshError})" else "")
             if (d.file != null) Text("File: ${d.file}" + (d.fileVersion?.let { " (version $it)" } ?: ""))
             if (d.hasImage && !d.running && block != null) Text(block, color = MaterialTheme.colorScheme.error)
+            if (d.hasImage && !d.running && !d.done && block == null && hint != null) Text(hint)
             if (d.running) {
                 Text(
                     "Keep the app open and the phone near the goggles until the update is done. " +
@@ -132,7 +149,7 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ picker.launch(arrayOf("*/*")) }, Modifier.heightIn(min = TouchHeight), enabled = connected) { Text("Update firmware…") }
                     if (d.hasImage) {
-                        Button({ s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done && block == null) {
+                        Button({ if (hint != null) confirm = true else s.dfu.install() }, Modifier.heightIn(min = TouchHeight), enabled = connected && !d.done && block == null) {
                             Text("Install")
                         }
                     }

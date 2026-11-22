@@ -104,8 +104,10 @@ fun versionHint(installed: String?, file: String?): String? {
     return "Same version is already installed"
 }
 
-/** Why Install must not start now: [dfuBlockReason], or a file that MCUboot's downgrade prevention would reject; null if allowed. */
-fun installBlockReason(battery: Int?, installed: String?, file: String?): String? = dfuBlockReason(battery) ?: versionHint(installed, file)
+/** Text of the question asked before installing a file that is not newer ([versionHint] non-null); the install is allowed. */
+fun downgradeQuestion(hint: String): String =
+    "$hint. An older firmware may bring back fixed bugs and may not understand settings saved by a newer one. " +
+        "Install it only if you know you need this version."
 
 /** Where an update is; [label] is the text shown. */
 enum class DfuPhase(val label: String) {
@@ -210,7 +212,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
             _state.update { it.copy(error = "Still reading the installed version, try again in a moment", detail = null) }
             return
         }
-        installBlockReason(client.state.value.battery, s.installed, s.fileVersion)?.let { r ->
+        dfuBlockReason(client.state.value.battery)?.let { r ->
             _state.update { it.copy(error = r, detail = null) }
             return
         }
