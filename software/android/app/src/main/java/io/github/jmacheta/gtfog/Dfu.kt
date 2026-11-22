@@ -25,6 +25,7 @@ import io.runtime.mcumgr.response.img.McuMgrImageStateResponse
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipInputStream
 
 private const val IMAGE_MAGIC = 0x96f3b83dL
@@ -41,10 +42,10 @@ fun parseImageVersion(b: ByteArray): String? {
     return "${u8(20)}.${u8(21)}.$rev" + if (build != 0L) "+$build" else ""
 }
 
-private const val MAX_IMAGE = 4_000_000
+const val MAX_IMAGE = 4_000_000
 
 /** Reads at most [max] bytes (a small zip can inflate far beyond its size). */
-private fun InputStream.readCapped(max: Int): ByteArray {
+fun InputStream.readCapped(max: Int): ByteArray {
     val out = ByteArrayOutputStream()
     val buf = ByteArray(8192)
     while (true) {
@@ -105,14 +106,14 @@ data class DfuState(
 
 /** Firmware update over mcumgr SMP (nRF Connect Device Manager library) on a second GATT link to the connected device. */
 @SuppressLint("MissingPermission")
-class Dfu(private val ctx: Context, private val client: GtfogClient) {
+class Dfu(private val ctx: Context, private val client: GtfogClient, private val beforeInstall: () -> Unit = {}) {
     private val _state = MutableStateFlow(DfuState())
     val state: StateFlow<DfuState> = _state
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // The mcumgr callbacks run on library threads; the rest runs on the main thread.
     @Volatile private var manager: FirmwareUpgradeManager? = null
-    @Volatile private var refreshing = false
+    private val refreshing = AtomicBoolean(false)
 
     /** A new connection: the installed version read earlier may belong to other goggles or an older firmware. */
     fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
@@ -120,14 +121,14 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
     /** Reads the version of slot 0 from the device (one read at a time; the error is shown in the card). */
     fun refresh(attempt: Int = 0) {
         val device = client.currentDevice() ?: return
-        if (_state.value.running || refreshing) return
-        refreshing = true
+        if (_state.value.running || !refreshing.compareAndSet(false, true)) return
         val t = McuMgrBleTransport(ctx, device)
+        val answered = AtomicBoolean(false) // per call: a late answer of a timed-out call must not end a newer one
         var timeout: Job? = null
         fun done(f: (DfuState) -> DfuState) {
             timeout?.cancel()
-            if (!refreshing) return // answered or timed out already
-            refreshing = false
+            if (!answered.compareAndSet(false, true)) return // answered or timed out already
+            refreshing.set(false)
             t.release()
             _state.update(f)
         }
@@ -168,7 +169,9 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
         val image = _state.value.image ?: return
         val device = client.currentDevice() ?: return
         if (_state.value.running) return
+        if (refreshing.get()) { _state.update { it.copy(error = "Still reading the installed version, try again in a moment", detail = null) }; return }
         dfuBlockReason(client.state.value.battery)?.let { r -> _state.update { it.copy(error = r, detail = null) }; return }
+        beforeInstall()
         val t = McuMgrBleTransport(ctx, device)
         fun finish(f: (DfuState) -> DfuState) {
             t.release()

@@ -24,8 +24,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +36,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -104,7 +106,8 @@ fun ScanScreen(s: Session, st: DeviceState) {
         onDispose { if (granted) s.stopScan() }
     }
 
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // The whole page scrolls (large font, landscape); the few devices in range are plain rows, not a nested lazy list.
+    Column(Modifier.safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("GTFOg", style = MaterialTheme.typography.headlineMedium)
         st.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (st.bondProblem) {
@@ -154,18 +157,20 @@ fun ScanScreen(s: Session, st: DeviceState) {
                     "On the first connection Android shows a pairing dialog: accept it.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(items, key = { it.address }) {
-                        Card(Modifier.fillMaxWidth().heightIn(min = MainHeight).clickable(onClickLabel = "Connect", role = Role.Button) { s.connect(it) }) {
-                            Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(it.label, style = MaterialTheme.typography.titleMedium)
-                                    Text(
-                                        it.address + if (it.address == s.lastAddress) "  (last used)" else "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items.forEach {
+                        key(it.address) {
+                            Card(Modifier.fillMaxWidth().heightIn(min = MainHeight).clickable(onClickLabel = "Connect", role = Role.Button) { s.connect(it) }) {
+                                Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(it.label, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            it.address + if (it.address == s.lastAddress) "  (last used)" else "",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                    Text("${it.rssi} dBm")
                                 }
-                                Text("${it.rssi} dBm")
                             }
                         }
                     }

@@ -64,13 +64,15 @@ data class DeviceSettings(
     val motionDelayS: Int = 60,
     val motionSpeeds: List<Int> = listOf(20, 50, 100),
     val size: Int = 8,
+    /** Flag bits above bit 1 as read from the device (future firmware); written back unchanged. */
+    val otherFlags: Int = 0,
 ) {
     val extended get() = size >= 6
     val perActivity get() = size >= 8
 
     /** Always the length the device uses: 2, 6 or 8 bytes. */
     fun encode(): ByteArray {
-        val head = byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0)).toByte(), autoOffMin.coerceIn(0, 255).toByte())
+        val head = byteArrayOf(((if (stealth) 1 else 0) or (if (transportLock) 2 else 0) or otherFlags).toByte(), autoOffMin.coerceIn(0, 255).toByte())
         if (!extended) return head
         val speeds = motionSpeeds.take(if (perActivity) 3 else 1).map { it.coerceIn(0, 100).toByte() }
         return head + byteArrayOf(
@@ -83,7 +85,7 @@ fun parseSettings(b: ByteArray): DeviceSettings? {
     // Longer than 8 (future firmware): the known 8 bytes are read, the rest is ignored.
     if (b.size != 2 && b.size != 6 && b.size < 8) return null
     val size = minOf(b.size, 8)
-    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = size)
+    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = size, otherFlags = u8(b, 0) and 0xFC)
     if (size == 2) return base
     val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < size) u8(b, 5 + i) else default }
     // Corrupt or future firmware: keep the values in the ranges the UI and stepFan can work with.
@@ -167,6 +169,9 @@ class SampleRing(private val cap: Int) {
     private val ys = IntArray(cap)
     private val zs = IntArray(cap)
     private var total = 0L
+
+    /** Samples per second of the last frame (the protocol field; the firmware sends 100). */
+    @Volatile var rateHz = 100
 
     @Synchronized
     fun add(s: Sample) {

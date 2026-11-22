@@ -1,12 +1,12 @@
 # Android app
 
 Kotlin / Jetpack Compose app in `software/android` that controls the GTFOg over Bluetooth LE and shows and records its accelerometer
-stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 36, version 0.3.1 (code 4). Platform `BluetoothGatt` for the app's own protocol, Compose `Canvas` for charts, and the
+stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 36, version 0.3.2 (code 5). Platform `BluetoothGatt` for the app's own protocol, Compose `Canvas` for charts, and the
 Nordic nRF Connect Device Manager library (`no.nordicsemi.android:mcumgr-ble` 2.7.4) for firmware update only.
 
 ## Screens
 
-Source files: `Queue.kt` (GATT operation queue and reconnect backoff, no Android types), `Ble.kt` (GATT client), `Session.kt` (scan, recording), `Dfu.kt`, `Protocol.kt`, `RecordService.kt`, `ScanScreen.kt`, `DeviceScreen.kt` (top bar, tabs, offline message), `ControlTab.kt`, `SettingsTab.kt`, `DebugTab.kt`,
+Source files: `Queue.kt` (GATT operation queue and reconnect backoff, no Android types), `LinkPolicy.kt` (reconnect decisions and pending-write bookkeeping, no Android types), `Ble.kt` (GATT client), `Session.kt` (scan, recording), `Dfu.kt`, `Protocol.kt`, `RecordService.kt`, `ScanScreen.kt`, `DeviceScreen.kt` (top bar, tabs, offline message), `ControlTab.kt`, `SettingsTab.kt`, `DebugTab.kt`,
 `Chart.kt`, `Theme.kt` (theme, touch sizes, chips).
 
 | Screen | Contents |
@@ -44,7 +44,7 @@ The device advertises the name `GTFOg` and service `a7f00001-5c1e-4b8e-9d2a-6f0e
 link: the first access makes Android show the Just Works pairing dialog, and the bond is stored on the device. The app retries a
 failed operation (ATT errors 5 and 15) every 1.5 s, up to 6 times (without limit while Android is creating the bond) while pairing completes.
 If it still fails, or the disconnect status is 5, 15 or 137, or the bond is removed or refused (`ACTION_BOND_STATE_CHANGED` to none), the app closes the link. If the phone had a bond (bond state BONDED before the failure) it shows "The goggles forgot this phone. Remove GTFOg in Android Bluetooth settings, then connect again" with a button for the Bluetooth settings
-(a stale bond is expected after the device flash was erased; not tried on a phone). Without a bond (the pairing dialog was cancelled, or the goggles refused a new phone after their 3-minute pairing window) it shows "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again". Disconnect statuses 19 and 22 are ordinary disconnects; but if the phone is bonded and the link drops 3 times right after connecting, before the services are found, the stale-bond text is shown too. A first connect that fails with status 133 is retried up to 3 times with the backoff before "Could not connect, try again". It requests ATT MTU 247 right after
+(a stale bond is expected after the device flash was erased; not tried on a phone). Without a bond (the pairing dialog was cancelled, or the goggles refused a new phone after their 3-minute pairing window) it shows "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again". Disconnect statuses 19 and 22 are ordinary disconnects; but if the phone is bonded and the link drops 3 times right after connecting, before the services are found, the stale-bond text is shown too. A first connect that fails with status 133, or whose service discovery fails with an error status, is retried up to 3 times with the backoff before giving up ("Could not connect, try again" / "Service discovery failed"); "Not a GTFOg" is shown only when discovery succeeded but the GTFOg service is missing. It requests ATT MTU 247 right after
 connecting; the result is kept and shown in the Debug tab when it is lower. Connect, MTU and discovery must finish within 15 s (then the app closes the link and retries or reports "Could not
 connect, try again"); a queued GATT operation with no callback within 5 s is dropped (not while a bond is being created); a late callback of a dropped operation is ignored (each operation has a key, the characteristic or descriptor, checked by `OpQueue.finish`). After a lost link the client reconnects with `autoConnect` after 1, 2, 4 ... 30 s (back to 1 s after a successful connection). The client
 registers for Bluetooth adapter changes: off closes the link ("Bluetooth is off"), on reconnects if the user still wants the
@@ -74,29 +74,29 @@ three times quickly) and notifies them; the app subscribes on connect.
 Accelerometer frame (little endian): `u16 seq`, `u8 rate_hz` (100), `u8 n` (at most 40), then `n` times `int16 x, y, z` in milli-g
 (range ±16 g). `seq` increases by 1 per frame and wraps; a gap counts as lost frames. Duplicate or reordered frames are not counted.
 GATT operations go through a serial queue (Android allows one at a time). The queue (order, retry, timeout) and the backoff are the pure classes
-`OpQueue` and `Backoff` in `Queue.kt`; `GtfogClient` only wraps `BluetoothGatt` around them. After every write (the last one of a burst), successful or not, the characteristic is read back (the fan also reads the fan state) so the screen shows the device's value; a failed one also shows "Could not change ...". Settings of 9 or more bytes and fan state of more than 2 bytes (future firmware) are read from the known bytes and the rest is ignored; settings are written back as 8 bytes.
+`OpQueue` and `Backoff` in `Queue.kt`, and the decisions (early drops, first-connect and discovery retries, pending writes) are `LinkPolicy` and `PendingWrites` in `LinkPolicy.kt`, all unit-tested; `GtfogClient` only wraps `BluetoothGatt` around them. After every write (the last one of a burst), successful or not, the characteristic is read back (the fan also reads the fan state) so the screen shows the device's value; a failed one also shows "Could not change ...". Settings of 9 or more bytes and fan state of more than 2 bytes (future firmware) are read from the known bytes and the rest is ignored; settings are written back as 8 bytes. Flag bits above bit 1 read from the device are kept and written back unchanged. The chart time axis uses the `rate_hz` of the last frame.
 
 ## Firmware update
 
 Settings tab, Firmware card. The installed version is slot 0 of mcumgr image list, read when the tab is shown with a connection.
 The Install button is disabled, with the reason "Charge to at least 50 % to update", when the battery is below 50 % or unknown (`dfuBlockReason` in `Protocol.kt`; `Dfu.install()` checks it too). "Update firmware..." opens the system file picker (`*/*`): a raw `zephyr.signed.bin` or the NCS `dfu_application.zip` (its single
 `.bin` is used). The MCUboot header magic `0x96f3b83d` is checked and the file version (header offset 20) is shown; anything else
-is an error; a file over 4 MB is "File too large". The file is read off the main thread, and the card says when it is the same version as, or older than, the installed one. "Install" runs `FirmwareUpgradeManager` in `TEST_AND_CONFIRM` mode over `McuMgrBleTransport` (a second GATT link to
+is an error; a file over 4 MB is "File too large" (the read itself stops at 4 MB, whatever size the provider reports). The file is read off the main thread, and the card says when it is the same version as, or older than, the installed one. "Install" runs `FirmwareUpgradeManager` in `TEST_AND_CONFIRM` mode over `McuMgrBleTransport` (a second GATT link to
 the connected device; swap time 20 s, upload window 4, alignment 4): validate, upload (percent, Cancel), test, reset, confirm.
 The device resets and `GtfogClient` reconnects; the file version is not trusted: after completion the app waits until the client
-is connected again (at most 60 s), then reads slot 0 from the device and shows that. A failed update shows "Update failed. The goggles keep running the firmware they started with; check the version after reconnecting." with the technical detail below it; after a failure in the reset or confirm step the app also reads the installed version once the goggles are back. While it runs the screen stays on (a window flag set by `MainActivity` for the whole update, whichever tab is shown), Disconnect and Back are disabled and the card asks to keep the app open. There is no foreground service: if Android kills the app in the background, or the phone leaves range, the update is interrupted (the old firmware stays). The installed version is read once per connection (a failed read is tried again twice, 3 s apart), one read at a time, and the card says why it could not read it. A zip entry is read only up to 4 MB. The
+is connected again (at most 60 s), then reads slot 0 from the device and shows that. A failed update shows "Update failed. The goggles keep running the firmware they started with; check the version after reconnecting." with the technical detail below it; after a failure in the reset or confirm step the app also reads the installed version once the goggles are back. When an update starts, Live and any recording are stopped (and cannot be started during it; the card says so). While it runs the screen stays on (a window flag set by `MainActivity` for the whole update, whichever tab is shown), Disconnect, Reconnect and Back are disabled and the card asks to keep the app open. There is no foreground service: if Android kills the app in the background, or the phone leaves range, the update is interrupted (the old firmware stays). The installed version is read when the Settings tab is shown and it is not known yet, so a failed read is also retried on each visit to the tab (and twice automatically, 3 s apart), one read at a time (Install refuses while a read runs), and the card says why it could not read it. A zip entry is read only up to 4 MB. The
 library 2.7.4 is the newest that builds without raising compileSdk to 37 (2.8.0 and later require it). Helpers `parseImageVersion`
 and `loadImage` are in `Dfu.kt`, tested in `DfuTest.kt`. Not tested on a phone or device.
 
 ## Recording
 
-Files go to `Android/data/io.github.jmacheta.gtfog/files/recordings/gtfog_YYYYMMDD_HHMMSS.csv`. Record turns Live on if needed and
-starts a foreground service (type `connectedDevice`) with an ongoing notification (duration, samples, lost frames, Stop). The
+Files go to `Android/data/io.github.jmacheta.gtfog/files/recordings/gtfog_YYYYMMDD_HHMMSS.csv` (`_1`, `_2` ... is appended if the name exists). Record turns Live on if needed and
+starts a foreground service (type `connectedDevice`) with an ongoing notification (chronometer, samples and lost frames refreshed every 5 s, Stop). If Android refuses to start the service (background start, API 31+) the recording stops with a message. The
 service keeps the process, the GATT link and the file writer alive with the screen off. Each frame is flushed to the file. If the
 link drops, the client reconnects with `autoConnect` and writes a `# reconnect at <ms>` line. Disconnect stops the recording, and so does any end of the link that the client closes itself (bad bond, not a GTFOg, failed first connect). The service holds a partial wake lock with a 4 h timeout. The file is opened and written on a background thread; if that fails the recording stops with a message.
 
 ```
-# start=2026-11-21T10:00:00+01:00, app=GTFOg 0.3.1, device=GTFOg by <manufacturer> <address>, rate=100 Hz
+# start=2026-11-21T10:00:00+01:00, app=GTFOg 0.3.2, device=GTFOg by <manufacturer> <address>, rate=100 Hz
 phone_time_ms,seq,index,x_mg,y_mg,z_mg
 1763715600123,42,0,12,-998,40
 1763715600123,42,1,10,-1001,38

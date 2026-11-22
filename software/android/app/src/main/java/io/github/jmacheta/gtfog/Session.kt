@@ -49,7 +49,7 @@ data class RecState(
 class Session(private val app: Application) {
     val ring = SampleRing(4096)
     val client = GtfogClient(app, ::onFrame, ::onReconnect)
-    val dfu = Dfu(app, client)
+    val dfu = Dfu(app, client) { stopRecording(); client.setLive(false) } // the update needs the radio and the screen to itself
     val adapter = app.getSystemService(BluetoothManager::class.java)?.adapter
     val scanResults = MutableStateFlow<List<ScanItem>>(emptyList())
     val stats = MutableStateFlow(Stats())
@@ -119,6 +119,7 @@ class Session(private val app: Application) {
         autoConnect = false
         prefs.edit().putString("last", item.address).apply()
         tracker.reset()
+        ring.clear()
         stats.value = Stats()
         dfu.forget()
         client.connect(item.device, item.label)
@@ -131,14 +132,17 @@ class Session(private val app: Application) {
     }
 
     fun setLive(on: Boolean) {
+        if (on && dfu.state.value.running) return
         if (on) {
             tracker.reset()
+            ring.clear()
             stats.value = Stats()
         }
         client.setLive(on)
     }
 
     private fun onFrame(now: Long, f: AccelFrame) {
+        if (f.rateHz > 0) ring.rateHz = f.rateHz
         f.samples.forEach(ring::add)
         tracker.onFrame(f.seq)
         stats.update { Stats(it.samples + f.samples.size, tracker.lost) }
@@ -165,13 +169,17 @@ class Session(private val app: Application) {
     }
 
     fun startRecording() {
-        if (rec.value.active) return
+        if (rec.value.active || dfu.state.value.running) return
         val now = Date()
-        val name = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now) + ".csv"
+        val base = "gtfog_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
+        // Stop and Record within one second must not overwrite the earlier file.
+        var name = "$base.csv"
+        var n = 1
+        while (File(dir, name).exists()) name = "${base}_${n++}.csv"
         recError.value = null
         // Opened on the io thread, before the first write queued after it; a full or missing storage ends here, not in a crash.
         io.execute {
-            runCatching { writer = File(dir, name).bufferedWriter() }.onFailure(::recordingFailed)
+            runCatching { writer = File(dir, name).bufferedWriter() }.onSuccess { handler.post(::refreshRecordings) }.onFailure(::recordingFailed)
         }
         val d = client.state.value
         val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=100 Hz"
@@ -180,7 +188,6 @@ class Session(private val app: Application) {
         if (!d.live) setLive(true)
         // The service starts only once the file exists.
         io.execute { if (writer != null) handler.post { if (rec.value.active) ContextCompat.startForegroundService(app, Intent(app, RecordService::class.java)) } }
-        refreshRecordings()
     }
 
     fun stopRecording() {

@@ -206,5 +206,19 @@ class ProtocolTest {
         assertTrue(listOf(5, 15, 137).all(::isAuthFailure))
         assertFalse(isAuthFailure(133))
     }
-}
 
+    @Test
+    fun unknownFlagBitsAreWrittenBack() {
+        val s = parseSettings(byteArrayOf(0x83.toByte(), 10, 5, 0, 60, 20, 50, 100))!!
+        assertTrue(s.stealth && s.transportLock)
+        assertArrayEquals(byteArrayOf(0x82.toByte(), 10, 5, 0, 60, 20, 50, 100), s.copy(stealth = false).encode())
+        assertArrayEquals(byteArrayOf(0x84.toByte(), 0), parseSettings(byteArrayOf(0x84.toByte(), 0))!!.encode())
+    }
+
+    @Test
+    fun settingsRoundTripForEverySize() {
+        for (b in listOf(byteArrayOf(1, 5), byteArrayOf(2, 0, 10, 1, 120, 40), byteArrayOf(3, 30, 5, 0, 60, 20, 50, 100))) {
+            assertArrayEquals(b, parseSettings(b)!!.encode())
+        }
+    }
+}

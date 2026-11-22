@@ -7,7 +7,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -22,7 +21,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             GtfogTheme {
                 Surface(Modifier.fillMaxSize()) {
-                    Box(Modifier.safeDrawingPadding()) {
+                    Box(Modifier.fillMaxSize()) {
                         val st by session.client.state.collectAsStateWithLifecycle()
                         val updating by session.dfu.state.collectAsStateWithLifecycle()
                         // The screen stays on for the whole update, whichever tab is shown.

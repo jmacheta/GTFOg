@@ -6,6 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -39,6 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -80,10 +87,14 @@ fun DeviceScreen(s: Session, st: DeviceState) {
     val offline = st.conn != Conn.Connected && tab != 2 && !(tab == 1 && dfu.running)
     Scaffold(
         topBar = {
-            Row(Modifier.padding(16.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The Scaffold insets cover the bottom bar and the content; the custom top bar takes the status bar and cutouts itself.
+            Row(
+                Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).padding(16.dp, 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(Modifier.weight(1f)) {
                     Text(st.name, style = MaterialTheme.typography.headlineSmall)
-                    Text(st.conn.text(), style = MaterialTheme.typography.bodySmall)
+                    Text(st.conn.text(), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodySmall)
                 }
                 OutlinedButton(
                     { if (rec.active) confirmDisconnect = true else s.disconnect() },
@@ -92,21 +103,20 @@ fun DeviceScreen(s: Session, st: DeviceState) {
             }
         },
         bottomBar = {
-            NavigationBar(windowInsets = WindowInsets(0)) {
+            NavigationBar {
                 TABS.forEachIndexed { i, n ->
                     NavigationBarItem(tab == i, { tab = i }, { TabIcon(i) }, label = { Text(n) })
                 }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
-        contentWindowInsets = WindowInsets(0),
     ) { pad ->
         Column(
             Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             when {
-                offline -> Offline(s, st)
+                offline -> Offline(s, st, dfu.running)
                 tab == 0 -> ControlTab(s, st)
                 tab == 1 -> SettingsTab(s, st)
                 else -> DebugTab(s, st)
@@ -116,19 +126,19 @@ fun DeviceScreen(s: Session, st: DeviceState) {
 }
 
 @Composable
-private fun Offline(s: Session, st: DeviceState) {
+private fun Offline(s: Session, st: DeviceState, updating: Boolean) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when (st.conn) {
                 Conn.Disconnected -> {
-                    Text(st.error ?: "Disconnected", style = MaterialTheme.typography.titleLarge)
+                    Text(st.error ?: "Disconnected", Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleLarge)
                     Text("The goggles are not connected.")
-                    Button({ s.client.reconnect() }, Modifier.fillMaxWidth().heightIn(min = MainHeight)) { Text("Reconnect") }
+                    Button({ s.client.reconnect() }, Modifier.fillMaxWidth().heightIn(min = MainHeight), enabled = !updating) { Text("Reconnect") }
                 }
                 else -> {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         CircularProgressIndicator(Modifier.size(32.dp))
-                        Text(st.conn.text(), style = MaterialTheme.typography.titleLarge)
+                        Text(st.conn.text(), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleLarge)
                     }
                     Text("Controls come back when the goggles answer.")
                 }

@@ -89,16 +89,14 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch(Dispatchers.IO) { // up to 4 MB: not on the main thread
             var name = uri.lastPathSegment ?: "file"
-            var size = 0L
             ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
                 if (c.moveToFirst()) {
                     c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = c.getString(it) }
-                    c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
                 }
             }
-            val tooLarge = size > 4_000_000
-            val bytes = if (tooLarge) null else runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            s.dfu.pick(name, bytes, if (tooLarge) "File too large (over 4 MB)" else "Cannot read the file")
+            // The provider's size column may be missing or wrong: the read itself is capped.
+            val r = runCatching { requireNotNull(ctx.contentResolver.openInputStream(uri)).use { it.readCapped(MAX_IMAGE) } }
+            s.dfu.pick(name, r.getOrNull(), r.exceptionOrNull()?.takeIf { it is IllegalArgumentException && it.message?.startsWith("File too large") == true }?.message ?: "Cannot read the file")
         }
     }
     Card(Modifier.fillMaxWidth()) {
@@ -112,7 +110,7 @@ private fun FirmwareCard(s: Session, st: DeviceState) {
             versionHint(d.installed, d.fileVersion)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (d.image != null && !d.running && block != null) Text(block, color = MaterialTheme.colorScheme.error)
             if (d.running) {
-                Text("Keep the app open and the phone near the goggles until the update is done.")
+                Text("Keep the app open and the phone near the goggles until the update is done. Live accelerometer and recording are stopped during the update.")
                 LinearProgressIndicator(progress = { d.percent / 100f }, Modifier.fillMaxWidth())
                 Text("${d.status} ${d.percent}%")
                 if (d.status == "Uploading") OutlinedButton({ s.dfu.cancel() }, Modifier.heightIn(min = TouchHeight)) { Text("Cancel") }

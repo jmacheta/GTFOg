@@ -26,8 +26,6 @@ import java.util.UUID
 enum class Conn { Idle, Connecting, Connected, Reconnecting, Disconnected }
 
 private const val CONNECT_TIMEOUT_MS = 15_000L
-private const val FIRST_CONNECT_RETRIES = 3 // status 133 on the first direct connect is a common Android flake
-private const val EARLY_DROPS = 3 // bonded phone, link dropped before the services were found
 
 const val PAIR_MESSAGE =
     "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again"
@@ -88,10 +86,8 @@ class GtfogClient(
     private var gatt: BluetoothGatt? = null
     private var device: BluetoothDevice? = null
     private var wantConnected = false
-    private var everConnected = false
     private var up = false // GATT link is up but the services are not ready yet
-    private var firstFails = 0
-    private var earlyDrops = 0
+    private val policy = LinkPolicy()
     private var live = false
     private var chars = emptyMap<UUID, BluetoothGattCharacteristic>()
     private val timer = object : Timer {
@@ -104,13 +100,11 @@ class GtfogClient(
     private val ops = OpQueue(timer, { device?.bondState == BluetoothDevice.BOND_BONDING }, { authFailed(isBonded()) })
     private val backoff = Backoff()
 
-    // Writes queued or in flight per characteristic. While any exist, notifications and reads of that
-    // characteristic are ignored: they carry older values and would overwrite the newer optimistic one.
-    private val pendingWrites = HashMap<UUID, Int>()
+    private val pendingWrites = PendingWrites<UUID>()
 
     private val connectTimeout = Runnable { lost("Could not connect, try again") }
 
-    private val reopen = Runnable { if (wantConnected && gatt == null) open(everConnected) }
+    private val reopen = Runnable { if (wantConnected && gatt == null) open(policy.everConnected) }
 
     private fun isBonded() = device?.bondState == BluetoothDevice.BOND_BONDED
 
@@ -128,11 +122,9 @@ class GtfogClient(
         override fun onReceive(c: Context, i: Intent) {
             val d = IntentCompat.getParcelableExtra(i, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
             if (d?.address != device?.address) return
-            val prev = i.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
             // BONDED -> NONE: the phone had a bond that is gone; BONDING -> NONE: a new pairing was cancelled or refused.
-            if (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_NONE && prev != BluetoothDevice.BOND_NONE) {
-                authFailed(prev == BluetoothDevice.BOND_BONDED)
-            }
+            bondLost(i.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1), i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1))
+                ?.let(::authFailed)
         }
     }
 
@@ -146,9 +138,7 @@ class GtfogClient(
         disconnect()
         device = d
         wantConnected = true
-        everConnected = false
-        firstFails = 0
-        earlyDrops = 0
+        policy.reset()
         backoff.reset()
         _state.value = DeviceState(Conn.Connecting, name, d.address)
         open(false)
@@ -174,7 +164,7 @@ class GtfogClient(
             _state.update { it.copy(conn = Conn.Disconnected, error = "Bluetooth is off") }
             return
         }
-        _state.update { it.copy(conn = if (everConnected) Conn.Reconnecting else Conn.Connecting, error = null) }
+        _state.update { it.copy(conn = if (policy.everConnected) Conn.Reconnecting else Conn.Connecting, error = null) }
         open(false)
     }
 
@@ -194,16 +184,22 @@ class GtfogClient(
     }
 
     /** The link is gone or never came up: retry in the background if it had worked before, else report. */
-    private fun lost(message: String, retryFirst: Boolean = false) {
+    private fun lost(message: String, next: Next? = null) {
         teardown()
-        if (wantConnected && everConnected) {
-            _state.update { it.copy(conn = Conn.Reconnecting, error = null) }
-            handler.postDelayed(reopen, backoff.next())
-        } else if (wantConnected && retryFirst && firstFails++ < FIRST_CONNECT_RETRIES) {
-            handler.postDelayed(reopen, backoff.next()) // still "Connecting"
-        } else {
-            wantConnected = false
-            _state.value = DeviceState(error = message)
+        act(if (wantConnected) next ?: policy.onLost() else Next.GiveUp, message)
+    }
+
+    private fun act(next: Next, message: String) {
+        when (next) {
+            Next.Reconnect -> {
+                _state.update { it.copy(conn = Conn.Reconnecting, error = null) }
+                handler.postDelayed(reopen, backoff.next())
+            }
+            Next.RetryFirst -> handler.postDelayed(reopen, backoff.next()) // still "Connecting"
+            else -> {
+                wantConnected = false
+                _state.value = DeviceState(error = message)
+            }
         }
     }
 
@@ -273,11 +269,10 @@ class GtfogClient(
 
     private fun write(u: UUID, bytes: ByteArray) {
         val c = chars[u] ?: return
-        pendingWrites[u] = (pendingWrites[u] ?: 0) + 1
+        pendingWrites.begin(u)
         enqueue(u, { status ->
-            writeDone(u)
             // Read back what the device really has (it may clamp or adjust the value); after the last write of a burst only.
-            if (u !in pendingWrites) {
+            if (pendingWrites.end(u)) {
                 read(u)
                 if (u == Uuids.FAN) read(Uuids.FAN_ACTUAL)
             }
@@ -287,11 +282,6 @@ class GtfogClient(
             c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             gatt?.writeCharacteristic(c) == true
         }
-    }
-
-    private fun writeDone(u: UUID) {
-        val n = (pendingWrites[u] ?: 0) - 1
-        if (n > 0) pendingWrites[u] = n else pendingWrites.remove(u)
     }
 
     private fun notify(u: UUID, on: Boolean) {
@@ -309,10 +299,9 @@ class GtfogClient(
 
     private fun setup() {
         handler.removeCallbacks(connectTimeout)
-        val reconnected = everConnected
-        everConnected = true
+        val reconnected = policy.everConnected
+        policy.ready()
         up = false
-        earlyDrops = 0
         backoff.reset()
         _state.update { it.copy(conn = Conn.Connected, error = null) }
         listOf(Uuids.FAN, Uuids.FAN_ACTUAL, Uuids.STROBE, Uuids.CHARGER, Uuids.BATTERY, Uuids.SETTINGS).forEach { notify(it, true) }
@@ -327,7 +316,7 @@ class GtfogClient(
             parseAccelFrame(v)?.let { onFrame(System.currentTimeMillis(), it) }
             return
         }
-        if (pendingWrites.containsKey(u)) return
+        if (pendingWrites.has(u)) return
         if (u == Uuids.SETTINGS) {
             parseSettings(v)?.let { s -> _state.update { it.copy(settings = s) } }
             return
@@ -364,8 +353,9 @@ class GtfogClient(
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 // A bonded phone whose link keeps dropping before the services are found: the goggles most likely lost the key.
-                val early = up && isBonded() && ++earlyDrops >= EARLY_DROPS
-                if (isAuthFailure(status) || early) authFailed(isBonded()) else lost(gattErrorText(status), retryFirst = status == 133)
+                val bonded = isBonded()
+                val next = policy.onDisconnect(status, up, bonded)
+                if (next == Next.AuthFailed) authFailed(bonded) else lost(gattErrorText(status), next)
             }
         }
 
@@ -378,11 +368,14 @@ class GtfogClient(
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (g !== gatt) return
             chars = g.services.flatMap { it.characteristics }.associateBy { it.uuid }
-            if (status != 0 || Uuids.FAN !in chars || Uuids.ACCEL !in chars) {
-                disconnect()
-                _state.value = DeviceState(error = "Not a GTFOg (service discovery status $status)")
-            } else {
-                setup()
+            when (val next = policy.onDiscovered(status, Uuids.FAN in chars && Uuids.ACCEL in chars)) {
+                null -> setup()
+                // A discovery error is a transient link problem; only a successful discovery without the service is the wrong device.
+                Next.NotGtfog -> {
+                    disconnect()
+                    _state.value = DeviceState(error = "Not a GTFOg (the GTFOg service was not found)")
+                }
+                else -> lost("Service discovery failed (status $status)", next)
             }
         }
 

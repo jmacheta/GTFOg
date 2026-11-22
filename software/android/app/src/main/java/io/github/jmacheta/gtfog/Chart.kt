@@ -39,13 +39,13 @@ fun Swatch(color: Color) {
 
 @Composable
 fun AccelChart(ring: SampleRing, windowS: Int, rangeG: Double?, tick: LongState, description: String) {
-    val bufs = remember { Array(3) { IntArray(3000) } }
+    val bufs = remember { Array(3) { IntArray(4096) } }
     val measurer = rememberTextMeasurer()
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val textStyle = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Canvas(Modifier.fillMaxWidth().height(240.dp).semantics { contentDescription = description }) {
         tick.longValue // read only here: a new tick redraws the chart, not the whole card
-        val n = windowS * 100
+        val n = (windowS * ring.rateHz).coerceIn(2, 4096) // the ring holds 4096 samples
         val m = ring.snapshot(n, bufs)
         var peak = 0
         for (b in bufs) for (k in 0 until m) peak = max(peak, abs(b[k]))

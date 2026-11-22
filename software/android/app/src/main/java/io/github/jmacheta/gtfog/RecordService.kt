@@ -38,7 +38,14 @@ class RecordService : Service() {
         }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Recording", NotificationManager.IMPORTANCE_LOW))
-        ServiceCompat.startForeground(this, ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        try {
+            ServiceCompat.startForeground(this, ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } catch (e: RuntimeException) { // e.g. ForegroundServiceStartNotAllowedException (API 31+) when started in the background
+            session.recError.value = "Recording failed: the system did not allow the background service (${e.message ?: e.javaClass.simpleName})"
+            session.stopRecording()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager::class.java)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gtfog:record").also { it.acquire(WAKE_LOCK_MS) }
@@ -47,7 +54,7 @@ class RecordService : Service() {
         job = scope.launch {
             while (isActive && session.rec.value.active) {
                 nm.notify(ID, notification())
-                delay(1000)
+                delay(5000) // the duration is a chronometer; only the counters need a refresh
             }
             stopSelf()
         }
@@ -70,7 +77,9 @@ class RecordService : Service() {
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("Recording (${state}) ${formatDuration(session.rec.durationMs)}")
+            .setContentTitle("Recording ($state)")
+            .setWhen(r.startMs)
+            .setUsesChronometer(true)
             .setContentText("${r.samples} samples, ${lost} lost frames")
             .setContentIntent(open)
             .setOngoing(true)
