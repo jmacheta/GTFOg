@@ -11,12 +11,18 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 using namespace gtfog;
 
+namespace {
+
+constexpr auto watchdog_start_margin = K_SECONDS(1);
+
 // A new image confirms itself only when Bluetooth works, else MCUboot reverts it on the next reset.
 void confirm_image(int ble_err) {
   if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
     LOG_ERR("cannot confirm the image");
   }
 }
+
+} // namespace
 
 int main() {
   // The settings first (stealth decides whether the LED lights up).
@@ -37,7 +43,7 @@ int main() {
     return control.settings().follows_motion();
   }));
   // The battery thread (and with it the watchdog) starts 500 ms after boot, so wait for it before confirming.
-  k_sleep(K_SECONDS(1));
+  k_sleep(watchdog_start_margin);
   confirm_image(ble_err);
   LOG_INF("started");
   return 0;
@@ -45,14 +51,15 @@ int main() {
 
 namespace {
 
-// The nRF52833 runs from VDDH (high voltage mode); its regulator must give 3.3 V to the GPIOs. Writing UICR needs a
-// reset, so this happens once, on the first boot of a new chip.
+// The regulator of the nRF52833 (VDDH mode) must give 3.3 V to the GPIOs; a UICR write needs a reset, so it happens once per chip.
+// Only an erased value (7) is rewritten: bits cannot be set again without an erase, and a failed write would reset forever.
 auto set_gpio_voltage() -> int {
   if(nrf_power_mainregstatus_get(NRF_POWER) != NRF_POWER_MAINREGSTATUS_HIGH) {
     return 0; // Normal voltage mode.
   }
   bool supply_is_3v3 = (NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) == (UICR_REGOUT0_VOUT_3V3 << UICR_REGOUT0_VOUT_Pos);
-  if(supply_is_3v3) {
+  bool supply_is_default = (NRF_UICR->REGOUT0 & UICR_REGOUT0_VOUT_Msk) == (UICR_REGOUT0_VOUT_DEFAULT << UICR_REGOUT0_VOUT_Pos);
+  if(supply_is_3v3 || !supply_is_default) {
     return 0;
   }
 

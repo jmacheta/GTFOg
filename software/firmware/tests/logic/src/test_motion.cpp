@@ -141,3 +141,12 @@ ZTEST(motion, test_activity_window_may_span_chunks_of_any_size) {
   zassert_equal(reports, 2);
   zassert_equal(*last, activity_level::running);
 }
+
+ZTEST(motion, test_reset_drops_the_partial_window) {
+  activity_classifier classifier;
+  std::array<accelerometer_sample, 60> batch{};
+  zassert_false(classifier.update(batch).has_value());
+  classifier.reset();
+  zassert_false(classifier.update(batch).has_value(), "60 + 60 samples would have completed a window without the reset");
+  zassert_true(classifier.update(std::span{batch}.first(40)).has_value());
+}

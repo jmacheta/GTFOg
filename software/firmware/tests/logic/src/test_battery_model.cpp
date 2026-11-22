@@ -84,3 +84,21 @@ ZTEST(battery_model, test_percentage_at_every_knot_of_the_curve) {
     zassert_equal(battery_percentage(k.millivolts), k.percent, "%d mV", k.millivolts);
   }
 }
+
+ZTEST(battery_model, test_read_failures_show_a_fault_once_then_power_off_once) {
+  using verdict = read_failure_guard::verdict;
+  read_failure_guard guard;
+  for(unsigned i = 1; i < read_failure_guard::fault_reads; ++i) {
+    zassert_equal(guard.update(false), verdict::ok);
+  }
+  zassert_equal(guard.update(false), verdict::fault);
+  for(unsigned i = read_failure_guard::fault_reads + 1; i < read_failure_guard::power_off_reads; ++i) {
+    zassert_equal(guard.update(false), verdict::ok);
+  }
+  zassert_equal(guard.update(false), verdict::power_off);
+  zassert_equal(guard.update(false), verdict::ok, "reported once");
+  zassert_equal(guard.update(true), verdict::ok);
+  zassert_equal(guard.update(false), verdict::ok);
+  zassert_equal(guard.update(false), verdict::ok);
+  zassert_equal(guard.update(false), verdict::fault, "a good read rearms it");
+}

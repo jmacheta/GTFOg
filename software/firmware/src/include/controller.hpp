@@ -63,7 +63,7 @@ constexpr std::size_t settings_size_v1 = 2;
 // Values a phone may write to the fan and strobe characteristics.
 [[nodiscard]] constexpr auto is_fan_percent(unsigned value) noexcept -> bool { return value <= 100; }
 [[nodiscard]] constexpr auto is_strobe_value(unsigned value) noexcept -> bool { return value <= 1; }
-[[nodiscard]] auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size>;
+[[nodiscard]] auto encode(device_settings settings) noexcept -> std::array<std::uint8_t, settings_size>;
 [[nodiscard]] auto decode_settings(std::span<std::uint8_t const> bytes, device_settings base = {}) noexcept -> std::optional<device_settings>;
 
 // The hardware the controller drives. The firmware implements it on the board, the tests with a fake.
@@ -71,9 +71,9 @@ class outputs {
 public:
   virtual void set_fan(unsigned percent) = 0; // 0 stops the fan, 1..100 runs it.
   virtual void set_strobe(bool on) = 0;
-  virtual void show(signal s) = 0;
-  virtual void power_off() = 0;                                // Does not return on the board.
-  virtual void settings_changed(device_settings const &s) = 0; // After the user changed them; to be stored. Must not block.
+  virtual void show(signal shown) = 0;
+  virtual void power_off() = 0;                                       // Does not return on the board.
+  virtual void settings_changed(device_settings const &settings) = 0; // After the user changed them; to be stored. Must not block.
 
 protected:
   ~outputs() = default;
@@ -101,8 +101,8 @@ struct controller_data {
   explicit controller_data(outputs &out) noexcept : out(out) {}
 
   void start();
-  void shut_down(signal s);
-  void indicate(signal s);
+  void shut_down(signal shown);
+  void indicate(signal shown);
   void apply_fan() { out.set_fan(fan_speed()); }
   void apply_strobe() { out.set_strobe(strobe()); }
   void change_fan_speed(int delta);
@@ -110,8 +110,10 @@ struct controller_data {
   void set_strobe(bool on);
   void track_activity(activity_level raw);
   void lose_sensor();
-  void store_settings(device_settings const &value, bool user_written);
-  void lift_lock();
+  void store_settings(device_settings const &value);
+  void publish_settings();
+  void unlock_by_gesture();
+  void reset_activity();
   void record_battery(battery_status status); // Before the battery_sample event, so the guards are pure.
   [[nodiscard]] auto idle_limit() const noexcept -> std::chrono::seconds;
   [[nodiscard]] auto in_use(bool phone_connected) const noexcept -> bool;
@@ -126,18 +128,18 @@ struct controller_data {
   unsigned fan{0}; // The manual mode target.
   activity_level level{activity_level::still};
   activity_level rising_to{activity_level::still};  // Lowest level seen while the raw level stayed above `level`.
-  unsigned rising_s{0};                             // Consecutive seconds above `level`.
+  unsigned rising_s{0};                             // Consecutive seconds above `level`; one `track_activity` call per second.
   activity_level falling_to{activity_level::still}; // Highest level seen while the raw level stayed below `level`.
   unsigned falling_s{0};                            // Consecutive seconds below `level`.
   bool strobe_on{false};
   std::uint8_t battery{0};
-  // The persisted settings. `transport_lock` and `mode` always equal the `locked` and `motion` states: only the settings_received
-  // rows (and the unlock row with `lift_lock`) change either side.
+  // The settings. `transport_lock` and `mode` are a cache of the lock and fan mode region states for the methods above, written
+  // only by the entry actions of those states; `controller::settings()` reads the states.
   device_settings config;
   std::chrono::seconds idle{0};
   bool battery_warned{false};
-  unsigned warning_s{0}; // Consecutive samples at or below `warning_percent`.
-  bool exhausted{false}; // The cutoff guard's verdict on the last sample.
+  unsigned low_battery_samples{0}; // Consecutive samples at or below `warning_percent`.
+  bool exhausted{false};           // The cutoff guard's verdict on the last sample.
   battery_guard guard;
 };
 
@@ -164,6 +166,7 @@ struct activity_sample {
   activity_level raw;
 }; // One second of accelerometer data.
 struct sensor_lost {};
+struct battery_unreadable {}; // The voltage cannot be read for a long time; there is no cutoff.
 struct report {
   signal shown;
 }; // The board layer's own LED signals.
@@ -180,6 +183,7 @@ inline constexpr auto unlocked = boost::sml::state<class unlocked_state>;
 inline constexpr auto locked = boost::sml::state<class locked_state>;
 inline constexpr auto manual = boost::sml::state<class manual_state>;
 inline constexpr auto motion = boost::sml::state<class motion_state>;
+inline constexpr auto synced = boost::sml::state<class synced_state>;
 } // namespace states
 
 // ponytail: percentages come from the rested-cell curve, so a fan under load reads lower; measure under load and tune.
@@ -189,67 +193,87 @@ constexpr unsigned warning_samples = 3; // Consecutive samples (30 s), like the 
 
 namespace guards {
 using events::battery_sample, events::button, events::elapsed, events::settings_received, events::start_check;
-using data = controller_data;
 
-inline constexpr auto pressed_plus = [](button const &e) { return e.press.action == button_action::plus; };
-inline constexpr auto pressed_minus = [](button const &e) { return e.press.action == button_action::minus; };
-inline constexpr auto pressed_strobe = [](button const &e) { return e.press.action == button_action::toggle_strobe; };
-inline constexpr auto pressed_unlock = [](button const &e) { return e.press.action == button_action::unlock; };
-inline constexpr auto pressed_power_off = [](button const &e) { return e.press.action == button_action::power_off; };
+inline constexpr auto pressed_power_off = [](button const &event) { return event.press.action == button_action::power_off; };
+inline constexpr auto pressed_plus = [](button const &event) { return event.press.action == button_action::plus; };
+inline constexpr auto pressed_minus = [](button const &event) { return event.press.action == button_action::minus; };
+inline constexpr auto pressed_strobe = [](button const &event) { return event.press.action == button_action::toggle_strobe; };
+inline constexpr auto pressed_unlock = [](button const &event) { return event.press.action == button_action::unlock; };
 // Every other press while locked; a held button shows the signal once.
-inline constexpr auto refused_while_locked = [](button const &e) {
-  return !e.press.repeat && e.press.action != button_action::unlock && e.press.action != button_action::power_off;
+inline constexpr auto refused_while_locked = [](button const &event) {
+  return !event.press.repeat && event.press.action != button_action::unlock && event.press.action != button_action::power_off;
+};
+inline constexpr auto sets_lock = [](settings_received const &event) { return event.value.transport_lock; };
+inline constexpr auto clears_lock = [](settings_received const &event) { return !event.value.transport_lock; };
+inline constexpr auto sets_motion = [](settings_received const &event) { return event.value.mode == fan_mode::motion; };
+inline constexpr auto sets_manual = [](settings_received const &event) { return event.value.mode == fan_mode::manual; };
+inline constexpr auto written_by_user = [](settings_received const &event) { return event.user_written; };
+
+inline constexpr auto battery_too_low_to_start = [](start_check const &event) { return !battery_allows_start(event.status); };
+inline constexpr auto battery_exhausted = [](controller_data const &data) { return data.exhausted; };
+inline constexpr auto battery_low_unwarned = [](controller_data const &data) {
+  return data.low_battery_samples >= warning_samples && !data.battery_warned;
+};
+inline constexpr auto battery_recovered = [](controller_data const &data) { return data.battery > recovered_percent; };
+
+inline constexpr auto in_use = [](controller_data const &data, elapsed const &event) { return data.in_use(event.phone_connected); };
+inline constexpr auto idle_limit_reached = [](controller_data const &data, elapsed const &event) {
+  auto limit = data.idle_limit();
+  return limit != std::chrono::seconds{0} && data.idle + event.passed >= limit;
 };
 
-inline constexpr auto battery_too_low_to_start = [](start_check const &e) { return !battery_allows_start(e.status); };
-inline constexpr auto battery_exhausted = [](data const &d) { return d.exhausted; };
-inline constexpr auto battery_low_unwarned = [](data const &d) { return d.warning_s >= warning_samples && !d.battery_warned; };
-inline constexpr auto battery_recovered = [](data const &d) { return d.battery > recovered_percent; };
-
-inline constexpr auto in_use = [](data const &d, elapsed const &e) { return d.in_use(e.phone_connected); };
-inline constexpr auto idle_limit_reached = [](data const &d, elapsed const &e) {
-  auto limit = d.idle_limit();
-  return limit != std::chrono::seconds{0} && d.idle + e.passed >= limit;
-};
-
-inline constexpr auto sets_lock = [](settings_received const &e) { return e.value.transport_lock; };
-inline constexpr auto clears_lock = [](settings_received const &e) { return !e.value.transport_lock; };
-inline constexpr auto sets_motion = [](settings_received const &e) { return e.value.mode == fan_mode::motion; };
-inline constexpr auto sets_manual = [](settings_received const &e) { return e.value.mode == fan_mode::manual; };
+// The activity region cannot see the lock region's state, so it reads the cache.
+inline constexpr auto not_locked = [](controller_data const &data) { return !data.config.transport_lock; };
 } // namespace guards
 
 namespace actions {
 using events::activity_sample, events::battery_sample, events::button, events::elapsed, events::fan_request, events::report,
     events::settings_received, events::strobe_request;
-using data = controller_data;
 
-inline constexpr auto start = [](data &d) { d.start(); };
-inline constexpr auto shut_down_by_user = [](data &d) { d.shut_down(signal::power_off); };
-inline constexpr auto shut_down_low_battery = [](data &d) { d.shut_down(signal::low_battery); };
-inline constexpr auto reset_idle = [](data &d) { d.idle = std::chrono::seconds{0}; };
-inline constexpr auto count_idle = [](data &d, elapsed const &e) { d.idle += e.passed; };
-inline constexpr auto warn_battery = [](data &d) {
-  d.battery_warned = true;
-  d.indicate(signal::battery_warning);
+inline constexpr auto start = [](controller_data &data) { data.start(); };
+inline constexpr auto shut_down_by_user = [](controller_data &data) { data.shut_down(signal::power_off); };
+inline constexpr auto shut_down_low_battery = [](controller_data &data) { data.shut_down(signal::low_battery); };
+inline constexpr auto reset_idle = [](controller_data &data) { data.idle = std::chrono::seconds{0}; };
+inline constexpr auto count_idle = [](controller_data &data, elapsed const &event) { data.idle += event.passed; };
+inline constexpr auto warn_battery = [](controller_data &data) {
+  data.battery_warned = true;
+  data.indicate(signal::battery_warning);
 };
-inline constexpr auto clear_battery_warning = [](data &d) { d.battery_warned = false; };
-inline constexpr auto lose_sensor = [](data &d) { d.lose_sensor(); };
-inline constexpr auto show = [](data &d, report const &e) { d.indicate(e.shown); };
-inline constexpr auto set_fan = [](data &d, fan_request const &e) { d.set_fan_speed(e.percent); };
-inline constexpr auto set_strobe = [](data &d, strobe_request const &e) { d.set_strobe(e.on); };
-inline constexpr auto store_settings = [](data &d, settings_received const &e) { d.store_settings(e.value, e.user_written); };
-inline constexpr auto track_activity = [](data &d, activity_sample const &e) { d.track_activity(e.raw); };
+inline constexpr auto clear_battery_warning = [](controller_data &data) { data.battery_warned = false; };
+inline constexpr auto lose_sensor = [](controller_data &data) { data.lose_sensor(); };
+inline constexpr auto show = [](controller_data &data, report const &event) { data.indicate(event.shown); };
+inline constexpr auto set_fan = [](controller_data &data, fan_request const &event) { data.set_fan_speed(event.percent); };
+inline constexpr auto set_strobe = [](controller_data &data, strobe_request const &event) { data.set_strobe(event.on); };
+inline constexpr auto store_settings = [](controller_data &data, settings_received const &event) { data.store_settings(event.value); };
+inline constexpr auto publish_settings = [](controller_data &data) { data.publish_settings(); };
+inline constexpr auto track_activity = [](controller_data &data, activity_sample const &event) { data.track_activity(event.raw); };
 
-inline constexpr auto raise_fan = [](data &d, button const &e) { d.change_fan_speed(static_cast<int>(e.press.steps * d.config.fan_step)); };
-inline constexpr auto lower_fan = [](data &d, button const &e) { d.change_fan_speed(-static_cast<int>(e.press.steps * d.config.fan_step)); };
-inline constexpr auto raise_fan_one_step = [](data &d) { d.change_fan_speed(d.config.fan_step); };
-inline constexpr auto toggle_strobe = [](data &d) { d.set_strobe(!d.strobe_on); };
-inline constexpr auto lift_lock = [](data &d) { d.lift_lock(); };
-inline constexpr auto show_locked = [](data &d) { d.indicate(signal::locked); };
+inline constexpr auto raise_fan = [](controller_data &data, button const &event) {
+  data.change_fan_speed(static_cast<int>(event.press.steps * data.config.fan_step));
+};
+inline constexpr auto lower_fan = [](controller_data &data, button const &event) {
+  data.change_fan_speed(-static_cast<int>(event.press.steps * data.config.fan_step));
+};
+inline constexpr auto raise_fan_one_step = [](controller_data &data) { data.change_fan_speed(data.config.fan_step); };
+inline constexpr auto toggle_strobe = [](controller_data &data) { data.set_strobe(!data.strobe_on); };
+inline constexpr auto show_locked = [](controller_data &data) { data.indicate(signal::locked); };
+
+// Entry actions: they run after the state has changed, so the effects see the new lock and mode.
+inline constexpr auto follow_lock = [](controller_data &data, settings_received const &event) {
+  data.config.transport_lock = event.value.transport_lock;
+  data.reset_activity(); // The accelerometer was off, so the old level says nothing.
+};
+inline constexpr auto follow_mode = [](controller_data &data, settings_received const &event) {
+  data.config.mode = event.value.mode;
+  data.reset_activity();
+};
+inline constexpr auto unlock_by_gesture = [](controller_data &data) { data.unlock_by_gesture(); };
 } // namespace actions
 
-// The device behavior as three orthogonal regions that all see every event: power (first matching row wins), the transport
-// lock and the fan mode.
+// The device behavior as five orthogonal regions that all see every event: power (first matching row wins), transport lock, fan
+// mode, activity tracking (in the mode region) and the settings write. The states are the one truth for lock and mode: the
+// settings events and the unlock gesture change them, and their entry actions then do the work. Region order matters: the
+// write is published last.
 struct controller_table {
   auto operator()() const {
     using namespace boost::sml;
@@ -272,25 +296,34 @@ struct controller_table {
        running + event<elapsed>        [idle_limit_reached]         / shut_down_by_user      = powered_off,
        running + event<elapsed>                                     / count_idle,
        running + event<sensor_lost>                                 / lose_sensor,
+       running + event<battery_unreadable>                          / shut_down_low_battery  = powered_off,
        running + event<report>                                      / show,
        running + event<fan_request>                                 / set_fan,
        running + event<strobe_request>                              / set_strobe,
        running + event<settings_received>                           / store_settings,
 
       // Transport lock
-      *unlocked + event<button>            [pressed_plus]           / raise_fan,
-       unlocked + event<button>            [pressed_minus]          / lower_fan,
-       unlocked + event<button>            [pressed_strobe]         / toggle_strobe,
-       unlocked + event<button>            [pressed_unlock]         / raise_fan_one_step,
-       unlocked + event<settings_received> [sets_lock]                                       = locked,
-       locked   + event<button>            [pressed_unlock]         / lift_lock              = unlocked,
-       locked   + event<button>            [refused_while_locked]   / show_locked,
-       locked   + event<settings_received> [clears_lock]                                     = unlocked,
+      *unlocked + event<button>            [pressed_plus]         / raise_fan,
+       unlocked + event<button>            [pressed_minus]        / lower_fan,
+       unlocked + event<button>            [pressed_strobe]       / toggle_strobe,
+       unlocked + event<button>            [pressed_unlock]       / raise_fan_one_step,
+       unlocked + event<settings_received> [sets_lock]                                  = locked,
+       locked   + event<button>            [pressed_unlock]                             = unlocked, // Entry: restore, signal.
+       locked   + event<button>            [refused_while_locked] / show_locked,
+       locked   + event<settings_received> [clears_lock]                                = unlocked,
+       locked   + on_entry<settings_received>             / follow_lock,
+       unlocked + on_entry<settings_received>             / follow_lock,
+       unlocked + on_entry<button>                        / unlock_by_gesture,
 
       // Fan mode
-      *manual + event<settings_received>   [sets_motion]                                     = motion,
-       motion + event<settings_received>   [sets_manual]                                     = manual,
-       motion + event<activity_sample>                              / track_activity);
+      *manual + event<settings_received>   [sets_motion]                                = motion,
+       motion + event<settings_received>   [sets_manual]                                = manual,
+       motion + event<activity_sample>     [not_locked]           / track_activity,
+       manual + on_entry<settings_received>               / follow_mode,
+       motion + on_entry<settings_received>               / follow_mode,
+
+      // Settings write: fan, strobe and storage, once both states above have changed
+      *synced + event<settings_received>   [written_by_user]      / publish_settings);
     // clang-format on
   }
 };
@@ -309,17 +342,19 @@ public:
     data.record_battery(status);
     machine.process_event(events::battery_sample{});
   }
-  // Settings loaded from flash; the lock and mode states follow them like those written by the user.
+  // Settings loaded from flash.
   void configure(device_settings loaded) { machine.process_event(events::settings_received{loaded, false}); }
   // The battery sample taken at boot: powers off at once, without starting the fan, when it is too low to run.
   void check_start(battery_status status) { machine.process_event(events::start_check{status}); }
-  // The status LED shows `s` (unless stealth); for the board layer's own events.
-  void report(signal s) { machine.process_event(events::report{s}); }
+  // The status LED shows `shown` (unless stealth); for the board layer's own events.
+  void report(signal shown) { machine.process_event(events::report{shown}); }
+  // The battery voltage cannot be read for a long time: powers off, as the cutoff cannot work.
+  void battery_unreadable() { machine.process_event(events::battery_unreadable{}); }
   // The accelerometer does not answer any more: motion mode runs at the still speed.
   void sensor_lost() { machine.process_event(events::sensor_lost{}); }
   // Settings written by the user (Bluetooth): stored through `outputs::settings_changed`.
   void update_settings(device_settings written) { machine.process_event(events::settings_received{written, true}); }
-  // Activity measured over one second of accelerometer data; only used in motion mode.
+  // Activity measured over one second of accelerometer data (call once per second); only used in motion mode.
   void observe(activity_level raw) { machine.process_event(events::activity_sample{raw}); }
   // Counts idle time for the auto-off; call it periodically with the time since the last call.
   void elapsed(std::chrono::seconds passed, bool phone_connected) { machine.process_event(events::elapsed{passed, phone_connected}); }
@@ -333,14 +368,20 @@ public:
   }
   [[nodiscard]] auto strobe() const noexcept -> bool { return data.strobe(); }
   [[nodiscard]] auto battery_level() const noexcept -> std::uint8_t { return data.battery; }
-  [[nodiscard]] auto settings() const noexcept -> device_settings { return data.config; }
+  // The settings with the lock and the mode taken from the states.
+  [[nodiscard]] auto settings() const -> device_settings {
+    auto result = data.config;
+    result.transport_lock = machine.is(states::locked);
+    result.mode = machine.is(states::motion) ? fan_mode::motion : fan_mode::manual;
+    return result;
+  }
 
   // Whether the machine is in `state` of `gtfog::states` (a state of any region).
-  template <typename State> [[nodiscard]] auto is(State state) -> bool { return machine.is(state); }
+  template <typename State> [[nodiscard]] auto is(State state) const -> bool { return machine.is(state); }
 
 private:
   controller_data data;
-  boost::sml::sm<controller_table> machine;
+  mutable boost::sml::sm<controller_table> machine; // `is()` is not const in SML.
 };
 
 } // namespace gtfog

@@ -11,13 +11,14 @@
 
 LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
 
-using gtfog::ble_battery_changed, gtfog::ble_charger_changed, gtfog::ble_connected, gtfog::with_controller;
+using gtfog::read_failure_guard, gtfog::ble_battery_changed, gtfog::ble_charger_changed, gtfog::ble_connected, gtfog::with_controller;
 
 namespace {
 
 // ponytail: VBAT reaches AIN4 through a 47k/47k divider (POWER sheet); calibrate against a multimeter.
 constexpr int vbat_divider = 2;
-constexpr unsigned sample_interval_s = 10; // The auto-off resolution.
+constexpr unsigned sample_interval_s = 10;        // The auto-off resolution.
+constexpr auto fault_signal_delay = K_SECONDS(2); // Lets the power-on signal finish first.
 constexpr std::uint32_t watchdog_timeout_ms = 30'000;
 
 device const *const watchdog = DEVICE_DT_GET(DT_NODELABEL(wdt0));
@@ -97,19 +98,37 @@ void battery_thread(void *, void *, void *) {
   if(setup_err != 0) {
     LOG_ERR("setup: %d", setup_err);
     // ponytail: the low-battery cutoff and the BAS value are gone; show it once, after the power-on signal.
-    k_sleep(K_SECONDS(2));
+    k_sleep(fault_signal_delay);
     with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
   }
+  read_failure_guard read_guard;
   std::int64_t counted_ms = k_uptime_get();
   while(true) {
     // The loop runs a little slower than its period; count the real time, keeping the remainder.
     auto idle = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds{k_uptime_get() - counted_ms});
     counted_ms += std::chrono::duration_cast<std::chrono::milliseconds>(idle).count();
     int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
+    // Fed right after the controller mutex section, before anything that may block (notifications).
+    auto feed_watchdog = [] {
+      if(watchdog_channel >= 0) {
+        std::ignore = wdt_feed(watchdog, watchdog_channel); // A failed feed ends in a reset, which is the safe outcome.
+      }
+    };
     if(millivolts < 0) {
       LOG_WRN("ADC read: %d", millivolts);
-      with_controller([&](gtfog::controller &control) { control.elapsed(idle, ble_connected()); });
+      // A failed setup was reported above; failing reads after a good setup mean no cutoff, so they end in a power off.
+      auto verdict = setup_err == 0 ? read_guard.update(false) : read_failure_guard::verdict::ok;
+      with_controller([&](gtfog::controller &control) {
+        control.elapsed(idle, ble_connected());
+        if(verdict == read_failure_guard::verdict::fault) {
+          control.report(gtfog::signal::fault);
+        } else if(verdict == read_failure_guard::verdict::power_off) {
+          control.battery_unreadable(); // Does not return on the board.
+        }
+      });
+      feed_watchdog();
     } else {
+      std::ignore = read_guard.update(true);
       auto status = make_status(millivolts);
       LOG_DBG("%d mV, charger %d", millivolts, static_cast<int>(status.charger));
       auto percent = with_controller([&](gtfog::controller &control) {
@@ -117,11 +136,9 @@ void battery_thread(void *, void *, void *) {
         control.elapsed(idle, ble_connected());
         return control.battery_level();
       });
+      feed_watchdog();
       ble_battery_changed(percent);
       ble_charger_changed(status.charger);
-    }
-    if(watchdog_channel >= 0) {
-      std::ignore = wdt_feed(watchdog, watchdog_channel); // A failed feed ends in a reset, which is the safe outcome.
     }
     k_sleep(K_SECONDS(sample_interval_s));
   }

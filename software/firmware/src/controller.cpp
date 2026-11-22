@@ -6,47 +6,49 @@ namespace gtfog {
 
 namespace {
 constexpr std::chrono::seconds locked_auto_off{std::chrono::minutes{1}};
+// ponytail: 2 s up, `motion_delay_s` down (one `track_activity` call per second); tune with the thresholds.
+constexpr unsigned rise_seconds = 2;
 } // namespace
 
-auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size> {
-  return {static_cast<std::uint8_t>((s.stealth ? 1U : 0U) | (s.transport_lock ? 2U : 0U)),
-          s.auto_off_minutes,
-          s.fan_step,
-          static_cast<std::uint8_t>(s.mode),
-          s.motion_delay_s,
-          s.motion_speed[0],
-          s.motion_speed[1],
-          s.motion_speed[2]};
+auto encode(device_settings settings) noexcept -> std::array<std::uint8_t, settings_size> {
+  return {static_cast<std::uint8_t>((settings.stealth ? 1U : 0U) | (settings.transport_lock ? 2U : 0U)),
+          settings.auto_off_minutes,
+          settings.fan_step,
+          static_cast<std::uint8_t>(settings.mode),
+          settings.motion_delay_s,
+          settings.motion_speed[0],
+          settings.motion_speed[1],
+          settings.motion_speed[2]};
 }
 
 auto decode_settings(std::span<std::uint8_t const> bytes, device_settings base) noexcept -> std::optional<device_settings> {
   if(!is_settings_size(bytes.size()) || (bytes[0] & ~3U) != 0) {
     return std::nullopt;
   }
-  auto s = base;
-  s.stealth = (bytes[0] & 1U) != 0;
-  s.transport_lock = (bytes[0] & 2U) != 0;
-  s.auto_off_minutes = bytes[1];
+  auto settings = base;
+  settings.stealth = (bytes[0] & 1U) != 0;
+  settings.transport_lock = (bytes[0] & 2U) != 0;
+  settings.auto_off_minutes = bytes[1];
   if(bytes.size() != settings_size_v1) {
     if(bytes[2] < 1 || bytes[2] > 25 || bytes[3] > 1 || bytes[4] < 5) {
       return std::nullopt;
     }
-    s.fan_step = bytes[2];
-    s.mode = static_cast<fan_mode>(bytes[3]);
-    s.motion_delay_s = bytes[4];
+    settings.fan_step = bytes[2];
+    settings.mode = static_cast<fan_mode>(bytes[3]);
+    settings.motion_delay_s = bytes[4];
     for(std::size_t i = 5; i < bytes.size(); ++i) {
       if(bytes[i] > 100) {
         return std::nullopt;
       }
-      s.motion_speed[i - 5] = bytes[i];
+      settings.motion_speed[i - 5] = bytes[i];
     }
   }
-  return s;
+  return settings;
 }
 
-void controller_data::indicate(signal s) {
+void controller_data::indicate(signal shown) {
   if(!config.stealth) {
-    out.show(s);
+    out.show(shown);
   }
 }
 
@@ -59,14 +61,19 @@ void controller_data::start() {
 }
 
 void controller_data::lose_sensor() {
-  level = activity_level::still;
-  rising_s = falling_s = 0;
+  reset_activity();
   apply_fan(); // Also tells the phone about the level.
   indicate(signal::fault);
 }
 
-void controller_data::lift_lock() {
+void controller_data::reset_activity() {
+  level = activity_level::still; // The accelerometer was off, so the old level says nothing.
+  rising_s = falling_s = 0;
+}
+
+void controller_data::unlock_by_gesture() {
   config.transport_lock = false;
+  reset_activity();
   apply_fan();
   apply_strobe();
   out.settings_changed(config);
@@ -91,16 +98,16 @@ void controller_data::set_fan_speed(unsigned percent) {
   apply_fan();
 }
 
-void controller_data::store_settings(device_settings const &value, bool user_written) {
-  if(!user_written) {
-    config = value;
-    return;
-  }
-  if(value.mode != config.mode) {
-    level = activity_level::still;
-    rising_s = falling_s = 0;
-  }
+// The lock and the mode stay: only the entry actions of the states change them.
+void controller_data::store_settings(device_settings const &value) {
+  auto lock = config.transport_lock;
+  auto mode = config.mode;
   config = value;
+  config.transport_lock = lock;
+  config.mode = mode;
+}
+
+void controller_data::publish_settings() {
   apply_fan();
   apply_strobe(); // Turning the lock on stops them.
   out.settings_changed(config);
@@ -111,7 +118,7 @@ void controller_data::track_activity(activity_level raw) {
   if(raw > level) {
     rising_to = rising_s++ == 0 ? raw : std::min(rising_to, raw);
     falling_s = 0;
-    if(rising_s >= 2) { // ponytail: 2 s up, config.motion_delay_s down; tune with the thresholds.
+    if(rising_s >= rise_seconds) {
       level = rising_to;
       rising_s = 0;
     }
@@ -139,7 +146,7 @@ void controller_data::set_strobe(bool on) {
 
 void controller_data::record_battery(battery_status status) {
   battery = battery_percentage(status.millivolts);
-  warning_s = battery <= warning_percent ? warning_s + 1 : 0;
+  low_battery_samples = battery <= warning_percent ? low_battery_samples + 1 : 0;
   exhausted = guard.update(status);
 }
 
@@ -154,11 +161,11 @@ auto controller_data::idle_limit() const noexcept -> std::chrono::seconds {
   return config.transport_lock ? locked_auto_off : std::chrono::minutes{config.auto_off_minutes};
 }
 
-void controller_data::shut_down(signal s) {
+void controller_data::shut_down(signal shown) {
   set_strobe(false);
   fan = 0;
   out.set_fan(0);
-  indicate(s);
+  indicate(shown);
   out.power_off();
 }
 

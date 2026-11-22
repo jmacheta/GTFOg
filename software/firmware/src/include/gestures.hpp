@@ -58,7 +58,8 @@ private:
     std::chrono::milliseconds next_repeat{};
   };
 
-  [[nodiscard]] auto single(button &b, bool is_pressed, button_action action, std::chrono::milliseconds now) noexcept -> std::optional<button_event>;
+  [[nodiscard]] auto single(button &key, bool is_pressed, button_action action, std::chrono::milliseconds now) noexcept
+      -> std::optional<button_event>;
   [[nodiscard]] auto short_plus(std::chrono::milliseconds now) noexcept -> button_event;
   [[nodiscard]] auto steps_after(std::chrono::milliseconds held) const noexcept -> unsigned;
 

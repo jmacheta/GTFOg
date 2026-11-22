@@ -15,6 +15,7 @@ using gtfog::with_controller;
 namespace {
 
 constexpr auto poll_interval = K_MSEC(20);
+constexpr auto fault_signal_delay = K_SECONDS(2); // Lets the power-on signal finish first.
 
 gpio_dt_spec const plus = GPIO_DT_SPEC_GET(DT_NODELABEL(button_plus), gpios);
 gpio_dt_spec const minus = GPIO_DT_SPEC_GET(DT_NODELABEL(button_minus), gpios);
@@ -56,7 +57,7 @@ void buttons_thread(void *, void *, void *) {
   if(init_error != 0) {
     LOG_ERR("buttons: %d", init_error);
     // ponytail: no interrupts, so only the polling below could work; show the fault once, after the power-on signal.
-    k_sleep(K_SECONDS(2));
+    k_sleep(fault_signal_delay);
     with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
   }
   while(true) {

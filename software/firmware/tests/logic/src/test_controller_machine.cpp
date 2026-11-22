@@ -34,45 +34,30 @@ ZTEST(controller_machine, test_initial_states) {
   fake_outputs out;
   controller c{out};
   zassert_true(c.is(states::running));
-  zassert_true(c.is(states::unlocked));
-  zassert_true(c.is(states::manual));
+  zassert_false(c.settings().transport_lock);
+  zassert_equal(c.settings().mode, fan_mode::manual);
 }
 
-ZTEST(controller_machine, test_settings_move_the_lock_and_mode_states) {
-  fake_outputs out;
-  controller c{out};
-  c.configure({.transport_lock = true, .mode = fan_mode::motion});
-  zassert_true(c.is(states::locked));
-  zassert_true(c.is(states::motion));
-  c.update_settings({.transport_lock = false, .mode = fan_mode::motion});
-  zassert_true(c.is(states::unlocked));
-  zassert_true(c.is(states::motion));
-  c.update_settings({.mode = fan_mode::manual});
-  zassert_true(c.is(states::manual));
-}
-
-// The lock and mode states always equal the flags of the settings, whichever way they were written.
-ZTEST(controller_machine, test_states_agree_with_the_settings_after_every_write) {
-  auto agree = [](controller &c) {
-    zassert_equal(c.is(states::locked), c.settings().transport_lock);
-    zassert_equal(c.is(states::unlocked), !c.settings().transport_lock);
-    zassert_equal(c.is(states::motion), c.settings().mode == fan_mode::motion);
-    zassert_equal(c.is(states::manual), c.settings().mode == fan_mode::manual);
-  };
+// The lock and mode are written once, in the settings: what comes out is what went in, whichever way it was written.
+ZTEST(controller_machine, test_settings_round_trip_through_the_machine_and_the_codec) {
   for(bool lock_a : {false, true}) {
     for(auto mode_a : {fan_mode::manual, fan_mode::motion}) {
       for(bool lock_b : {false, true}) {
         for(auto mode_b : {fan_mode::manual, fan_mode::motion}) {
           fake_outputs out;
           controller c{out};
-          c.configure({.transport_lock = lock_a, .mode = mode_a}); // Flash load at boot.
-          agree(c);
-          c.update_settings({.transport_lock = lock_b, .mode = mode_b}); // Bluetooth.
-          agree(c);
-          c.configure({.transport_lock = lock_a, .mode = mode_a});
-          agree(c);
+          device_settings loaded{.transport_lock = lock_a, .mode = mode_a};
+          device_settings written{.transport_lock = lock_b, .mode = mode_b};
+          c.configure(loaded); // Flash load at boot.
+          zassert_true(c.settings() == loaded);
+          c.update_settings(written); // Bluetooth.
+          zassert_true(c.settings() == written);
+          auto bytes = encode(c.settings());
+          auto decoded = decode_settings(bytes);
+          zassert_true(decoded.has_value() && *decoded == written);
+          c.configure(loaded);
           c.handle(press(button_action::unlock));
-          agree(c);
+          zassert_false(c.settings().transport_lock);
         }
       }
     }
@@ -89,7 +74,7 @@ ZTEST(controller_machine, test_lock_blocks_fan_and_strobe_in_manual_mode_and_unl
   zassert_true(out.strobe);
 
   c.update_settings({.transport_lock = true});
-  zassert_true(c.is(states::locked));
+  zassert_true(c.settings().transport_lock);
   zassert_equal(out.fan, 0);
   zassert_false(out.strobe);
   c.handle(press(button_action::plus));
@@ -99,7 +84,7 @@ ZTEST(controller_machine, test_lock_blocks_fan_and_strobe_in_manual_mode_and_unl
   zassert_false(out.strobe);
 
   c.handle(press(button_action::unlock));
-  zassert_true(c.is(states::unlocked));
+  zassert_false(c.settings().transport_lock);
   zassert_equal(out.fan, 20, "the targets were kept");
   zassert_true(out.strobe);
   zassert_equal(out.signals.back(), signal::unlocked);
@@ -115,8 +100,8 @@ ZTEST(controller_machine, test_lock_blocks_fan_and_strobe_in_motion_mode_and_unl
   zassert_equal(out.fan, 30);
 
   c.update_settings({.transport_lock = true, .mode = fan_mode::motion, .motion_speed = {30, 50, 80}});
-  zassert_true(c.is(states::locked));
-  zassert_true(c.is(states::motion));
+  zassert_true(c.settings().transport_lock);
+  zassert_equal(c.settings().mode, fan_mode::motion);
   c.observe(activity_level::running);
   c.observe(activity_level::running);
   c.handle(press(button_action::plus));
@@ -125,9 +110,9 @@ ZTEST(controller_machine, test_lock_blocks_fan_and_strobe_in_motion_mode_and_unl
   zassert_false(out.strobe);
 
   c.handle(press(button_action::unlock));
-  zassert_true(c.is(states::unlocked));
-  zassert_true(c.is(states::motion));
-  zassert_equal(out.fan, 80, "the level measured under the lock applies again");
+  zassert_false(c.settings().transport_lock);
+  zassert_equal(c.settings().mode, fan_mode::motion);
+  zassert_equal(out.fan, 30, "the accelerometer was off under the lock, so the level starts again at still");
   zassert_true(out.strobe);
 }
 
@@ -197,12 +182,12 @@ ZTEST(controller_machine, test_motion_and_manual_switching) {
   c.power_on();
   c.observe(activity_level::walking);
   c.observe(activity_level::walking);
-  zassert_true(c.is(states::motion));
+  zassert_equal(c.settings().mode, fan_mode::motion);
   zassert_equal(out.fan, 50);
   zassert_equal(c.activity_code(), 1);
 
   c.update_settings({.mode = fan_mode::manual, .motion_speed = {20, 50, 80}});
-  zassert_true(c.is(states::manual));
+  zassert_equal(c.settings().mode, fan_mode::manual);
   zassert_equal(c.activity_code(), 255);
   zassert_equal(out.fan, 0, "the manual target is untouched");
   c.observe(activity_level::running); // Ignored in manual mode.
@@ -210,7 +195,7 @@ ZTEST(controller_machine, test_motion_and_manual_switching) {
   zassert_equal(out.fan, 0);
 
   c.update_settings({.mode = fan_mode::motion, .motion_speed = {20, 50, 80}});
-  zassert_true(c.is(states::motion));
+  zassert_equal(c.settings().mode, fan_mode::motion);
   zassert_equal(c.activity_code(), 0, "back to still");
   zassert_equal(out.fan, 20);
 }
@@ -243,4 +228,75 @@ ZTEST(controller_machine, test_battery_warning_once_until_the_cell_recovers) {
   sample(3500);
   zassert_equal(count(), 2);
   zassert_true(c.is(states::running));
+}
+
+ZTEST(controller_machine, test_activity_level_restarts_when_the_lock_flips_by_gesture_or_bluetooth) {
+  for(bool by_gesture : {true, false}) {
+    fake_outputs out;
+    controller c{out};
+    c.update_settings({.mode = fan_mode::motion, .motion_speed = {30, 50, 80}});
+    c.power_on();
+    c.observe(activity_level::running);
+    c.observe(activity_level::running);
+    zassert_equal(out.fan, 80);
+    c.update_settings({.transport_lock = true, .mode = fan_mode::motion, .motion_speed = {30, 50, 80}});
+    zassert_equal(out.fan, 0);
+    if(by_gesture) {
+      c.handle(press(button_action::unlock));
+    } else {
+      c.update_settings({.mode = fan_mode::motion, .motion_speed = {30, 50, 80}});
+    }
+    zassert_equal(out.fan, 30);
+    zassert_equal(c.activity_code(), 0);
+  }
+}
+
+ZTEST(controller_machine, test_unreadable_battery_powers_off) {
+  fake_outputs out;
+  controller c{out};
+  c.power_on();
+  c.battery_unreadable();
+  zassert_true(c.is(states::powered_off));
+  zassert_true(out.powered_off);
+  zassert_equal(out.signals.back(), signal::low_battery);
+}
+
+// The lock and mode regions hold the truth; every way in leads to the matching state.
+ZTEST(controller_machine, test_lock_and_mode_states_follow_flash_load_bluetooth_and_the_unlock_gesture) {
+  fake_outputs out;
+  controller c{out};
+  zassert_true(c.is(states::unlocked) && c.is(states::manual));
+
+  c.configure({.transport_lock = true, .mode = fan_mode::motion}); // Flash load: states change, nothing is shown or saved.
+  zassert_true(c.is(states::locked) && c.is(states::motion));
+  zassert_equal(out.saved, 0);
+  zassert_true(out.signals.empty());
+
+  c.handle(press(button_action::unlock));
+  zassert_true(c.is(states::unlocked) && c.is(states::motion));
+  zassert_equal(out.saved, 1);
+  zassert_equal(out.signals.back(), signal::unlocked);
+
+  c.update_settings({.transport_lock = true, .mode = fan_mode::manual}); // Bluetooth.
+  zassert_true(c.is(states::locked) && c.is(states::manual));
+  zassert_equal(out.saved, 2);
+  c.update_settings({.stealth = true, .transport_lock = true}); // Same states: stay.
+  zassert_true(c.is(states::locked) && c.is(states::manual));
+  c.update_settings({});
+  zassert_true(c.is(states::unlocked) && c.is(states::manual));
+  zassert_equal(out.saved, 4);
+}
+
+ZTEST(controller_machine, test_encoded_flags_come_from_the_states) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.transport_lock = true, .mode = fan_mode::motion});
+  auto bytes = encode(c.settings());
+  zassert_equal(bytes[0] & 2U, 2U);
+  zassert_equal(bytes[3], 1);
+  c.handle(press(button_action::unlock)); // Only the state changes; the flag follows it.
+  zassert_true(c.is(states::unlocked));
+  bytes = encode(c.settings());
+  zassert_equal(bytes[0] & 2U, 0U);
+  zassert_equal(bytes[3], 1);
 }

@@ -85,13 +85,19 @@ need the new MCUboot over SWD once.
 
 ## Calibration knobs
 
-Marked `ponytail:` in the code; tune them on a board.
+Marked `ponytail:` in the code (grep for it); tune them on a board.
 
 | Knob | Value | Where |
 | --- | --- | --- |
 | `vbat_divider` | 2 (47k/47k on the POWER sheet, unverified) | `battery.cpp` |
 | `fan_min_duty_permille` | 200 | `board.cpp` |
 | Li-ion curve | 8 points, 3300..4200 mV | `battery_model.cpp` |
+| `walk_threshold_milli_g`, `run_threshold_milli_g` | 80, 300 mg (standard deviation per second) | `motion.hpp` |
+| `rise_seconds` | 2 s above the level before it rises (down: `motion_delay_s` setting) | `controller.cpp` |
+| `warning_percent`, `recovered_percent`, `warning_samples` | 10 %, 15 %, 3 samples (30 s) | `controller.hpp` |
+| `start_millivolts` | 3400 mV | `battery_model.hpp` |
+| `cutoff_millivolts`, `samples_below_cutoff` | 3300 mV, 3 samples | `battery_model.hpp` |
+| `fault_reads`, `power_off_reads` | 3 and 6 failed voltage reads (30 s, 60 s) | `battery_model.hpp` |
 | Charger STAT table | per the BQ25185 datasheet; board 2 reports a recoverable fault on USB (TS network?) | `battery_model.cpp` |
 
 ## Design files (`hardware/`)

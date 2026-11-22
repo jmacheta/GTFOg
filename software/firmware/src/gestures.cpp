@@ -42,18 +42,18 @@ auto button_gestures::update(bool plus_pressed, bool minus_pressed, std::chrono:
   return single(minus, minus_pressed, button_action::minus, now);
 }
 
-auto button_gestures::single(button &b, bool is_pressed, button_action action, std::chrono::milliseconds now) noexcept
+auto button_gestures::single(button &key, bool is_pressed, button_action action, std::chrono::milliseconds now) noexcept
     -> std::optional<button_event> {
-  if(is_pressed && !b.pressed) {
-    b = {.pressed = true, .pressed_at = now, .next_repeat = now + timing.long_press};
+  if(is_pressed && !key.pressed) {
+    key = {.pressed = true, .pressed_at = now, .next_repeat = now + timing.long_press};
     return std::nullopt;
   }
 
-  auto held = now - b.pressed_at;
+  auto held = now - key.pressed_at;
   if(!is_pressed) {
-    bool counted = b.pressed && held >= timing.short_press && held < timing.stuck;
-    bool repeated = b.next_repeat != b.pressed_at + timing.long_press;
-    b.pressed = false;
+    bool counted = key.pressed && held >= timing.short_press && held < timing.stuck;
+    bool repeated = key.next_repeat != key.pressed_at + timing.long_press;
+    key.pressed = false;
     if(!counted) {
       return std::nullopt;
     }
@@ -68,18 +68,18 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
     return repeated ? std::nullopt : std::optional{button_event{action}};
   }
 
-  if(!b.pressed || b.stuck) {
+  if(!key.pressed || key.stuck) {
     return std::nullopt;
   }
   if(held >= timing.stuck) {
-    b.stuck = true;
+    key.stuck = true;
     return std::nullopt;
   }
-  if(now < b.next_repeat) {
+  if(now < key.next_repeat) {
     return std::nullopt;
   }
-  bool later = b.next_repeat != b.pressed_at + timing.long_press;
-  b.next_repeat = now + timing.repeat_interval;
+  bool later = key.next_repeat != key.pressed_at + timing.long_press;
+  key.next_repeat = now + timing.repeat_interval;
   return button_event{action, steps_after(held), later};
 }
 

@@ -27,7 +27,10 @@ i2c_dt_spec const bus = I2C_DT_SPEC_GET(DT_NODELABEL(accelerometer));
 gpio_dt_spec const power = GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), accelerometer_pwr_gpios);
 
 constexpr std::chrono::milliseconds poll_time{200}; // The 32-sample FIFO holds 320 ms at 100 Hz.
+constexpr auto shutdown_wait = K_SECONDS(1);        // Longest wait for the thread to cut the power.
 constexpr auto retry_delay = K_SECONDS(10);
+constexpr int sensor_power_cycle_off_ms = 100;   // With the supply off.
+constexpr int sensor_settle_ms = 500;            // From supply on until the sensor answers.
 constexpr auto lost_retry_delay = K_SECONDS(60); // A sensor that was given up on is tried again this rarely.
 
 std::atomic<bool> streaming{false};
@@ -53,11 +56,11 @@ auto power_up() -> int {
   if(int err = gpio_pin_configure_dt(&power, GPIO_OUTPUT_INACTIVE); err != 0) {
     return err;
   }
-  k_msleep(100);
+  k_msleep(sensor_power_cycle_off_ms);
   if(int err = gpio_pin_set_dt(&power, 1); err != 0) {
     return err;
   }
-  k_msleep(500);
+  k_msleep(sensor_settle_ms);
 
   std::uint8_t id = 0;
   if(int err = i2c_reg_read_byte_dt(&bus, reg_devid, &id); err != 0) {
@@ -116,6 +119,7 @@ void accelerometer_thread(void *, void *, void *) {
     while(wanted()) {
       if(streaming && !was_streaming) {
         flush_fifo();
+        classifier.reset();
         seq = 0;
         filled = 0;
       }
@@ -127,6 +131,7 @@ void accelerometer_thread(void *, void *, void *) {
       if(gtfog::fifo_overflowed(status)) {
         LOG_WRN("FIFO overflow");
         flush_fifo(); // Samples were lost; start over.
+        classifier.reset();
         status = 0;
       }
       for(unsigned i = 0; i < gtfog::fifo_entries(status); ++i) {
@@ -191,6 +196,6 @@ void gtfog::accelerometer_power_off() {
   shutdown = true;
   k_sem_give(&wanted_changed);
   // The thread may be inside power_up() (0.6 s) or wait for the controller mutex held by our caller; do not wait for ever.
-  std::ignore = k_sem_take(&shutdown_done, K_SECONDS(1));
+  std::ignore = k_sem_take(&shutdown_done, shutdown_wait);
   power_down(); // Fallback when the thread did not answer in time.
 }

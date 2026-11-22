@@ -36,6 +36,8 @@ bt_uuid_128 const charger_uuid = GTFOG_UUID(5);
 bt_uuid_128 const settings_uuid = GTFOG_UUID(6);
 bt_uuid_128 const effective_fan_uuid = GTFOG_UUID(7);
 constexpr char settings_key[] = "gtfog/cfg";
+constexpr auto save_delay = K_SECONDS(2); // Settings changes within this time are stored together.
+constexpr auto advertising_retry = K_SECONDS(5);
 
 std::atomic<std::uint8_t> charger{0};
 // ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1); the accelerometer thread reads only the cached ATT MTU.
@@ -182,7 +184,7 @@ void start_advertising(k_work *) {
   if(int err = bt_le_adv_start(&param, advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
      err != 0 && err != -EALREADY) {
     LOG_ERR("advertising: %d", err);
-    k_work_reschedule(&advertising_work, K_SECONDS(5));
+    k_work_reschedule(&advertising_work, advertising_retry);
   }
 }
 
@@ -322,7 +324,7 @@ void ble_settings_changed(device_settings const &settings) {
   k_spin_unlock(&pending_settings_lock, key);
   k_work_submit(&notify_settings_work);
   // Bursts (button auto-repeat in motion mode) become one flash write.
-  k_work_reschedule(&save_settings_work, K_SECONDS(2));
+  k_work_reschedule(&save_settings_work, save_delay);
 }
 
 void ble_settings_flush() {

@@ -90,6 +90,9 @@ public:
   // The level of the last window that these samples completed, if any.
   [[nodiscard]] auto update(std::span<accelerometer_sample const> samples) noexcept -> std::optional<activity_level>;
 
+  // Drops the partial window, e.g. after a gap in the samples.
+  void reset() noexcept { count = 0, mean = m2 = 0; }
+
 private:
   unsigned count{0};
   float mean{0}, m2{0}; // Welford running mean and sum of squared deviations.
