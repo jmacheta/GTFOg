@@ -1,4 +1,5 @@
 #include "controller.hpp"
+#include "fake_outputs.hpp"
 
 #include <zephyr/ztest.h>
 
@@ -10,27 +11,7 @@
 using namespace gtfog;
 using namespace std::chrono_literals;
 
-namespace {
-
-struct fake_outputs final : outputs {
-  unsigned fan{999};
-  bool strobe{true};
-  std::vector<signal> signals;
-  bool powered_off{false};
-  std::vector<device_settings> saved;
-  unsigned fan_calls{0};
-
-  void set_fan(unsigned percent) override {
-    fan = percent;
-    ++fan_calls;
-  }
-  void set_strobe(bool on) override { strobe = on; }
-  void show(signal s) override { signals.push_back(s); }
-  void power_off() override { powered_off = true; }
-  void settings_changed(device_settings const &s) override { saved.push_back(s); }
-};
-
-} // namespace
+namespace {} // namespace
 
 ZTEST_SUITE(controller, nullptr, nullptr, nullptr, nullptr, nullptr);
 

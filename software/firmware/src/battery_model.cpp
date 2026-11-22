@@ -31,10 +31,11 @@ auto battery_percentage(int millivolts) noexcept -> std::uint8_t {
     return 0;
   }
   for(std::size_t i = 1; i != curve.size(); ++i) {
-    auto [upper_mv, upper_percent] = curve[i];
-    if(millivolts < upper_mv) {
-      auto [lower_mv, lower_percent] = curve[i - 1];
-      return static_cast<std::uint8_t>(lower_percent + (millivolts - lower_mv) * (upper_percent - lower_percent) / (upper_mv - lower_mv));
+    auto [upper_millivolts, upper_percent] = curve[i];
+    if(millivolts < upper_millivolts) {
+      auto [lower_millivolts, lower_percent] = curve[i - 1];
+      return static_cast<std::uint8_t>(lower_percent +
+                                       (millivolts - lower_millivolts) * (upper_percent - lower_percent) / (upper_millivolts - lower_millivolts));
     }
   }
   return 100;

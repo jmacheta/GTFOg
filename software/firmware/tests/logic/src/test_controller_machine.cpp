@@ -1,4 +1,5 @@
 #include "controller.hpp"
+#include "fake_outputs.hpp"
 
 #include <zephyr/ztest.h>
 
@@ -9,20 +10,6 @@ using namespace gtfog;
 using namespace std::chrono_literals;
 
 namespace {
-
-struct fake_outputs final : outputs {
-  unsigned fan{999};
-  bool strobe{true};
-  std::vector<signal> signals;
-  bool powered_off{false};
-  unsigned saved{0};
-
-  void set_fan(unsigned percent) override { fan = percent; }
-  void set_strobe(bool on) override { strobe = on; }
-  void show(signal s) override { signals.push_back(s); }
-  void power_off() override { powered_off = true; }
-  void settings_changed(device_settings const &) override { ++saved; }
-};
 
 auto press(button_action action, unsigned steps = 1) -> button_event { return {action, steps}; }
 
@@ -126,7 +113,7 @@ ZTEST(controller_machine, test_locked_buttons_signal_once_and_do_not_save) {
   c.handle(button_event{button_action::minus, 1, true});
   c.handle(button_event{button_action::toggle_strobe, 1, false});
   zassert_true((out.signals == std::vector{signal::locked, signal::locked}));
-  zassert_equal(out.saved, 0);
+  zassert_equal(out.saved_count(), 0);
 }
 
 ZTEST(controller_machine, test_power_off_from_every_lock_and_mode_state) {
@@ -269,22 +256,22 @@ ZTEST(controller_machine, test_lock_and_mode_states_follow_flash_load_bluetooth_
 
   c.configure({.transport_lock = true, .mode = fan_mode::motion}); // Flash load: states change, nothing is shown or saved.
   zassert_true(c.is(states::locked) && c.is(states::motion));
-  zassert_equal(out.saved, 0);
+  zassert_equal(out.saved_count(), 0);
   zassert_true(out.signals.empty());
 
   c.handle(press(button_action::unlock));
   zassert_true(c.is(states::unlocked) && c.is(states::motion));
-  zassert_equal(out.saved, 1);
+  zassert_equal(out.saved_count(), 1);
   zassert_equal(out.signals.back(), signal::unlocked);
 
   c.update_settings({.transport_lock = true, .mode = fan_mode::manual}); // Bluetooth.
   zassert_true(c.is(states::locked) && c.is(states::manual));
-  zassert_equal(out.saved, 2);
+  zassert_equal(out.saved_count(), 2);
   c.update_settings({.stealth = true, .transport_lock = true}); // Same states: stay.
   zassert_true(c.is(states::locked) && c.is(states::manual));
   c.update_settings({});
   zassert_true(c.is(states::unlocked) && c.is(states::manual));
-  zassert_equal(out.saved, 4);
+  zassert_equal(out.saved_count(), 4);
 }
 
 ZTEST(controller_machine, test_encoded_flags_come_from_the_states) {

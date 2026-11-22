@@ -270,10 +270,8 @@ inline constexpr auto follow_mode = [](controller_data &data, settings_received 
 inline constexpr auto unlock_by_gesture = [](controller_data &data) { data.unlock_by_gesture(); };
 } // namespace actions
 
-// The device behavior as five orthogonal regions that all see every event: power (first matching row wins), transport lock, fan
-// mode, activity tracking (in the mode region) and the settings write. The states are the one truth for lock and mode: the
-// settings events and the unlock gesture change them, and their entry actions then do the work. Region order matters: the
-// write is published last.
+// Five orthogonal regions that see every event: power (first matching row wins), lock, fan mode (with activity tracking) and the
+// settings write, published last. The states are authoritative for lock and mode; `config` holds a cache written only by their entry actions.
 struct controller_table {
   auto operator()() const {
     using namespace boost::sml;

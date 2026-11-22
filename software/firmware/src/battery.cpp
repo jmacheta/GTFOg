@@ -97,7 +97,7 @@ void battery_thread(void *, void *, void *) {
   int setup_err = setup();
   if(setup_err != 0) {
     LOG_ERR("setup: %d", setup_err);
-    // ponytail: the low-battery cutoff and the BAS value are gone; show it once, after the power-on signal.
+    // ponytail: the low-battery cutoff and the BAS value are gone until a retry works; show it after the power-on signal.
     k_sleep(fault_signal_delay);
     with_controller([](gtfog::controller &control) { control.report(gtfog::signal::fault); });
   }
@@ -107,6 +107,9 @@ void battery_thread(void *, void *, void *) {
     // The loop runs a little slower than its period; count the real time, keeping the remainder.
     auto idle = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds{k_uptime_get() - counted_ms});
     counted_ms += std::chrono::duration_cast<std::chrono::milliseconds>(idle).count();
+    if(setup_err != 0) {
+      setup_err = setup(); // Retried every period; a failure counts as a failed read below.
+    }
     int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
     // Fed right after the controller mutex section, before anything that may block (notifications).
     auto feed_watchdog = [] {
@@ -116,8 +119,8 @@ void battery_thread(void *, void *, void *) {
     };
     if(millivolts < 0) {
       LOG_WRN("ADC read: %d", millivolts);
-      // A failed setup was reported above; failing reads after a good setup mean no cutoff, so they end in a power off.
-      auto verdict = setup_err == 0 ? read_guard.update(false) : read_failure_guard::verdict::ok;
+      // Failing reads, or a setup that keeps failing, mean no cutoff, so they end in a power off.
+      auto verdict = read_guard.update(false);
       with_controller([&](gtfog::controller &control) {
         control.elapsed(idle, ble_connected());
         if(verdict == read_failure_guard::verdict::fault) {

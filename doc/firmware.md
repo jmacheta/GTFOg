@@ -32,7 +32,7 @@ Board layer (`src/`):
 | Thread | Priority | Stack | Job |
 | --- | --- | --- | --- |
 | `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Starts BLE, checks the battery, powers the controller on, confirms the image, returns |
-| `buttons` | 5 | 2048 B | Waits for a pin change; polls every 20 ms while a button is down |
+| `buttons` | 5 | 2048 B | Waits for a pin change; polls every 20 ms while a button is down, or always when the interrupt setup failed (`fault` once) |
 | `battery` | 7 | 2048 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
@@ -57,8 +57,8 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal. In motion mode it sets the target of the current activity level and stores the settings |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
 | `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off. Otherwise signal `battery_warning` once after 3 samples in a row (30 s) at 10 % or less, armed again above 15 %; the curve is for a rested cell, so the fan load is a calibration item |
-| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off`. Motion mode at level still counts as idle on purpose (goggles left on a shelf turn off), so a user who stays motionless for `auto_off_minutes` is powered off although the fan runs at the still speed; set auto-off to 0 or move, a phone connection also keeps it on. While `transport_lock` is on the limit is 1 minute whatever `auto_off_minutes` says (also 0 never), so a locked device woken in a bag turns itself off; a connected phone or a button press restarts the count |
-| `battery_unreadable()` (`battery` thread) | Signal `low_battery` and power off. The thread calls it after 6 failed voltage reads in a row (60 s, `read_failure_guard`), as the cutoff cannot work; 3 failed reads (30 s) show `fault` once, a good read rearms both. Not for a failed setup (that shows `fault` once and the device runs) |
+| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. Only an encrypted connection (security level 2 or higher, set by the `security_changed` callback and cleared on disconnect) counts as a phone; an unpaired link does not. After `auto_off_minutes` (0 never): the same as `power_off`. Motion mode at level still counts as idle on purpose (goggles left on a shelf turn off), so a user who stays motionless for `auto_off_minutes` is powered off although the fan runs at the still speed; set auto-off to 0 or move, an encrypted phone connection also keeps it on. While `transport_lock` is on the limit is 1 minute whatever `auto_off_minutes` says (also 0 never), so a locked device woken in a bag turns itself off; an encrypted phone connection or a button press restarts the count |
+| `battery_unreadable()` (`battery` thread) | Signal `low_battery` and power off. The thread calls it after 6 failed voltage reads in a row (60 s, `read_failure_guard`), as the cutoff cannot work; 3 failed reads (30 s) show `fault` once, a good read rearms both. A failed ADC or GPIO setup is retried every period and counts as a failed read, so it ends the same way |
 | `sensor_lost()` (accelerometer) | Level still (so motion mode runs at the still speed and the activity code is 0), signal `fault` |
 | `report(signal)` (board layer) | Shows the signal unless stealth: `pairing_refused`, `fault` |
 | `observe(level)` (accelerometer, once per second, motion mode) | Raw activity level of the last second; may switch the level, see [Motion mode](#motion-mode) |
@@ -269,7 +269,7 @@ logging off.
 - The activity thresholds (80 and 300 mg) and the speed defaults are not calibrated; the watchdog, the 1 s recovery hold and the pairing window are not tested on hardware.
 - The VBAT divider needs checking on a board, and board 2 reports a charger fault on USB (see [Battery and charger](#battery-and-charger)).
 - MCUboot USB serial recovery is not tested on hardware.
-- BLE works on a second board (`ble_test.py` passes); the first board transmits (RADIO in TX, checked over SWD) but no
-  host receives it, so its RF path or 32 MHz crystal is suspect.
+- BLE works on a second board (`ble_test.py` passes); the first board transmits but no host receives it. Its 32 MHz crystal was
+  measured at +215 ppm (see the errata in [hardware.md](hardware.md)) and X201 needs to be replaced.
 - Release builds need the private signing key (see above); pairing is Just Works (LE Secure Connections only) within the first 3 minutes after every wake, so anyone in range can pair then.
 - Hardware to verify: sensor recovery and loss handling, the 200 ms FIFO poll (no overflow), the boot battery check, the `fault` and `pairing_refused` patterns.

@@ -43,6 +43,7 @@ std::atomic<std::uint8_t> charger{0};
 // ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1); the accelerometer thread reads only the cached ATT MTU.
 std::atomic<bt_conn *> current_conn{nullptr};
 std::atomic<std::uint16_t> att_mtu{0};
+std::atomic<bool> link_encrypted{false}; // Security level 2 or higher; only such a connection counts as a phone in use.
 
 auto read_fan(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint16_t len, std::uint16_t offset) -> ssize_t {
   auto value = with_controller([](gtfog::controller &control) { return static_cast<std::uint8_t>(control.fan_speed()); });
@@ -260,6 +261,12 @@ void connected(bt_conn *conn, std::uint8_t err) {
   current_conn = bt_conn_ref(conn);
 }
 
+void security_changed(bt_conn *conn, bt_security_t level, bt_security_err err) {
+  if(err == BT_SECURITY_ERR_SUCCESS && conn == current_conn) {
+    link_encrypted = level >= BT_SECURITY_L2;
+  }
+}
+
 void mtu_updated(bt_conn *, std::uint16_t tx, std::uint16_t rx) { att_mtu = std::min(tx, rx); }
 
 bt_gatt_cb gatt_callbacks = {.att_mtu_updated = mtu_updated};
@@ -269,6 +276,7 @@ void disconnected(bt_conn *conn, std::uint8_t reason) {
   accelerometer_stream(false);
   if(conn == current_conn) {
     att_mtu = 0;
+    link_encrypted = false;
     bt_conn_unref(current_conn.exchange(nullptr));
   }
 }
@@ -281,6 +289,7 @@ BT_CONN_CB_DEFINE(connection_callbacks) = {
     .connected = connected,
     .disconnected = disconnected,
     .recycled = recycled,
+    .security_changed = security_changed,
 };
 
 namespace gtfog {
@@ -310,7 +319,7 @@ auto ble_init() -> int {
   return 0;
 }
 
-auto ble_connected() -> bool { return current_conn.load() != nullptr; }
+auto ble_connected() -> bool { return link_encrypted; }
 
 void ble_state_changed() {
   if(bt_is_ready()) {
