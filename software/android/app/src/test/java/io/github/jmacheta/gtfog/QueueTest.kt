@@ -33,7 +33,8 @@ class QueueTest {
     private val timer = FakeTimer()
     private var bonding = false
     private var authFailed = 0
-    private val q = OpQueue(timer, { bonding }, { authFailed++ })
+    private var stuck = 0
+    private val q = OpQueue(timer, { bonding }, { authFailed++ }, { stuck++ })
     private val log = ArrayList<String>()
 
     private fun op(name: String, start: Boolean = true) =
@@ -100,6 +101,46 @@ class QueueTest {
         assertTrue(q.busy)
         q.finish(0, "b")
         assertEquals("end b 0", log.last())
+    }
+
+    @Test
+    fun lateCallbackOfTimedOutOpDoesNotCompleteNewerOpWithSameKey() {
+        q.enqueue(Op({ log += "run a1"; true }, { log += "end a1 $it" }, "a")); q.enqueue(Op({ log += "run a2"; true }, { log += "end a2 $it" }, "a"))
+        timer.advance(5_000)
+        assertEquals(listOf("run a1", "end a1 $OP_TIMEOUT", "run a2"), log)
+        q.finish(0, "a") // late answer of a1: swallowed
+        assertTrue(q.busy)
+        q.finish(0, "a") // the real answer of a2
+        assertEquals("end a2 0", log.last())
+        assertFalse(q.busy)
+    }
+
+    @Test
+    fun cccdKeyDoesNotMatchCharacteristicKey() {
+        q.enqueue(Op({ true }, { log += "end $it" }, "cccd fan"))
+        q.finish(0, "fan")
+        assertTrue(q.busy)
+        q.finish(0, "cccd fan")
+        assertEquals(listOf("end 0"), log)
+    }
+
+    @Test
+    fun threeTimeoutsOrRefusalsInARowAreStuck() {
+        repeat(3) { q.enqueue(op("t$it")) }
+        timer.advance(5_000); timer.advance(5_000)
+        assertEquals(0, stuck)
+        timer.advance(5_000)
+        assertEquals(1, stuck)
+        repeat(3) { q.enqueue(op("r$it", start = false)) } // refused: the same escalation, counted again from zero
+        assertEquals(2, stuck)
+    }
+
+    @Test
+    fun realAnswerResetsTheStuckCount() {
+        repeat(2) { q.enqueue(op("r$it", start = false)) }
+        q.enqueue(op("ok")); q.finish(0)
+        repeat(2) { q.enqueue(op("s$it", start = false)) }
+        assertEquals(0, stuck)
     }
 
     @Test

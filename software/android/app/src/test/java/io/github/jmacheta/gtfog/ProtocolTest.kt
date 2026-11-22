@@ -56,6 +56,29 @@ class ProtocolTest {
     }
 
     @Test
+    fun seqGapBoundaryIsLostBelow0x8000() {
+        val t = SeqTracker()
+        listOf(0, 0x8000).forEach(t::onFrame) // gap 0x7FFF: counted as lost
+        assertEquals(0x7FFF, t.lost)
+        val u = SeqTracker()
+        listOf(0, 0x8001).forEach(u::onFrame) // gap 0x8000: treated as reordered
+        assertEquals(0, u.lost)
+    }
+
+    @Test
+    fun frameIgnoresTrailingBytes() {
+        val f = parseAccelFrame(le16(1) + byteArrayOf(100, 1) + ByteArray(6) + byteArrayOf(9, 9))!!
+        assertEquals(1, f.samples.size)
+    }
+
+    @Test
+    fun stepFanClamps() {
+        assertEquals(55, stepFan(50, 1, 5))
+        assertEquals(0, stepFan(3, -1, 5))
+        assertEquals(100, stepFan(98, 1, 20))
+    }
+
+    @Test
     fun csvFormat() {
         val f = AccelFrame(7, 100, listOf(Sample(1, -2, 3), Sample(4, 5, -6)))
         assertEquals("1000,7,0,1,-2,3\n1000,7,1,4,5,-6\n", csvLines(1000, f))

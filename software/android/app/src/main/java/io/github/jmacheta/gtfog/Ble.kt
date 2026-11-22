@@ -6,12 +6,15 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
@@ -26,6 +29,7 @@ import java.util.UUID
 enum class Conn { Idle, Connecting, Connected, Reconnecting, Disconnected }
 
 private const val CONNECT_TIMEOUT_MS = 15_000L
+private const val CLOSE_TIMEOUT_MS = 1_000L
 
 const val PAIR_MESSAGE =
     "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again"
@@ -73,7 +77,6 @@ private fun charName(u: UUID) = when (u) {
  * The client follows the Bluetooth adapter: off closes the link, on reconnects if the user still wants it.
  */
 @SuppressLint("MissingPermission")
-@Suppress("DEPRECATION")
 class GtfogClient(
     private val ctx: Context,
     private val onFrame: (Long, AccelFrame) -> Unit,
@@ -97,12 +100,15 @@ class GtfogClient(
 
         override fun remove(r: Runnable) = handler.removeCallbacks(r)
     }
-    private val ops = OpQueue(timer, { device?.bondState == BluetoothDevice.BOND_BONDING }, { authFailed(isBonded()) })
+    private val ops = OpQueue(timer, { device?.bondState == BluetoothDevice.BOND_BONDING }, { authFailed(isBonded()) }, { lost("Connection stalled") })
     private val backoff = Backoff()
 
     private val pendingWrites = PendingWrites<UUID>()
 
     private val connectTimeout = Runnable { lost("Could not connect, try again") }
+
+    private var closing: BluetoothGatt? = null
+    private val closeTimeout = Runnable { closeNow() }
 
     private val reopen = Runnable { if (wantConnected && gatt == null) open(policy.everConnected) }
 
@@ -151,8 +157,7 @@ class GtfogClient(
     fun disconnect() {
         wantConnected = false
         live = false
-        gatt?.disconnect()
-        teardown()
+        hangUp()
         _state.value = DeviceState()
     }
 
@@ -172,6 +177,25 @@ class GtfogClient(
         if (!wantConnected || _state.value.conn == Conn.Disconnected) return
         teardown()
         _state.update { it.copy(conn = Conn.Disconnected, error = "Bluetooth is off") }
+    }
+
+    /** Ends the link on purpose: disconnect now, close when Android confirms (or after 1 s), so the goggles see a clean LL terminate. */
+    private fun hangUp() {
+        closeNow()
+        val g = gatt
+        if (g != null) {
+            g.disconnect()
+            closing = g
+            handler.postDelayed(closeTimeout, CLOSE_TIMEOUT_MS)
+        }
+        gatt = null // the callbacks of g are ignored from here on, except its DISCONNECTED
+        teardown()
+    }
+
+    private fun closeNow() {
+        handler.removeCallbacks(closeTimeout)
+        closing?.close()
+        closing = null
     }
 
     private fun teardown() {
@@ -211,8 +235,7 @@ class GtfogClient(
         if (!wantConnected) return
         wantConnected = false
         live = false
-        gatt?.disconnect()
-        teardown()
+        hangUp()
         _state.value = DeviceState(error = if (hadBond) BOND_MESSAGE else PAIR_MESSAGE, bondProblem = hadBond)
     }
 
@@ -237,7 +260,7 @@ class GtfogClient(
     /** Fan up or down by the device's step per click (5 % for old firmware). */
     fun stepFan(dir: Int) {
         val st = _state.value
-        setFan((st.fan ?: return) + dir * (st.settings?.fanStep ?: 5))
+        setFan(stepFan(st.fan ?: return, dir, st.settings?.fanStep ?: 5))
     }
 
     fun setLive(on: Boolean) {
@@ -278,10 +301,28 @@ class GtfogClient(
             }
             if (status != 0) _state.update { it.copy(notice = "Could not change ${charName(u)}", noticeSeq = it.noticeSeq + 1) }
         }) {
-            c.value = bytes
-            c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            gatt?.writeCharacteristic(c) == true
+            writeCharacteristic(c, bytes)
         }
+    }
+
+    // API 33 replaced the shared c.value / d.value with explicit arguments; the old path serves API 26-32.
+    @Suppress("DEPRECATION")
+    private fun writeCharacteristic(c: BluetoothGattCharacteristic, bytes: ByteArray): Boolean {
+        val g = gatt ?: return false
+        if (Build.VERSION.SDK_INT >= 33) {
+            return g.writeCharacteristic(c, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+        }
+        c.value = bytes
+        c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        return g.writeCharacteristic(c)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun writeDescriptor(d: BluetoothGattDescriptor, value: ByteArray): Boolean {
+        val g = gatt ?: return false
+        if (Build.VERSION.SDK_INT >= 33) return g.writeDescriptor(d, value) == BluetoothStatusCodes.SUCCESS
+        d.value = value
+        return g.writeDescriptor(d)
     }
 
     private fun notify(u: UUID, on: Boolean) {
@@ -289,9 +330,7 @@ class GtfogClient(
         gatt?.setCharacteristicNotification(c, on)
         val d = c.getDescriptor(Uuids.CCCD) ?: return
         enqueue(cccdKey(u)) {
-            d.value = if (on) android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            else android.bluetooth.BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-            gatt?.writeDescriptor(d) == true
+            writeDescriptor(d, if (on) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
         }
     }
 
@@ -339,6 +378,10 @@ class GtfogClient(
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (g === closing) {
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) closeNow()
+                return
+            }
             if (g !== gatt) return
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 clearQueue()
@@ -379,6 +422,7 @@ class GtfogClient(
             }
         }
 
+        @Suppress("DEPRECATION")
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             if (g !== gatt) return
             if (status == 0) onValue(c.uuid, c.value ?: ByteArray(0))
@@ -390,7 +434,7 @@ class GtfogClient(
             ops.finish(status, c.uuid)
         }
 
-        override fun onDescriptorWrite(g: BluetoothGatt, d: android.bluetooth.BluetoothGattDescriptor, status: Int) {
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
             if (g === gatt) ops.finish(status, cccdKey(d.characteristic.uuid))
         }
 
@@ -405,6 +449,7 @@ class GtfogClient(
             ops.finish(status, c.uuid)
         }
 
+        @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
             if (g === gatt) onValue(c.uuid, c.value ?: ByteArray(0))
         }

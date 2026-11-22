@@ -36,7 +36,9 @@ private val FAN_STEPS = listOf("1 %" to 1, "2 %" to 2, "5 %" to 5, "10 %" to 10,
 @Composable
 fun SettingsTab(s: Session, st: DeviceState) {
     val cur = st.settings
-    val ok = st.hasSettings && cur != null
+    val updating by s.dfu.state.collectAsStateWithLifecycle()
+    val ok = st.hasSettings && cur != null && !updating.running
+    if (updating.running) Text("Settings are off during a firmware update.", color = MaterialTheme.colorScheme.error)
     if (!st.hasSettings) Text("Update the firmware to change settings", color = MaterialTheme.colorScheme.error)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

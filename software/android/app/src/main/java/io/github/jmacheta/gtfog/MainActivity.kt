@@ -35,4 +35,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // Back on the Control tab ends the activity: drop the link unless a recording needs it (its service keeps the process) or an update runs.
+    override fun onDestroy() {
+        super.onDestroy()
+        val s = (application as GtfogApp).session
+        if (isFinishing && !s.rec.value.active && !s.dfu.state.value.running) s.disconnect()
+    }
 }

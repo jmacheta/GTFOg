@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
 
 private val DELAYS = listOf("15 s" to 15, "30 s" to 30, "1 min" to 60, "2 min" to 120, "4 min" to 240)
@@ -46,6 +47,8 @@ private val LEVEL_SPEEDS = listOf("Stop" to 0) + (1..10).map { "${it * 10} %" to
 
 @Composable
 fun ControlTab(s: Session, st: DeviceState) {
+    val updating by s.dfu.state.collectAsStateWithLifecycle()
+    if (updating.running) Text("Controls are off during a firmware update.", color = MaterialTheme.colorScheme.error)
     if (st.settings?.transportLock == true) {
         Card(Modifier.fillMaxWidth()) {
             Text(
@@ -55,30 +58,30 @@ fun ControlTab(s: Session, st: DeviceState) {
         }
     }
     BatteryWidget(st.battery, st.charger)
-    FanCard(s, st)
-    StrobeCard(s, st)
-    ModeCard(s, st)
+    FanCard(s, st, !updating.running)
+    StrobeCard(s, st, !updating.running)
+    ModeCard(s, st, !updating.running)
 }
 
 @Composable
-private fun StrobeCard(s: Session, st: DeviceState) {
+private fun StrobeCard(s: Session, st: DeviceState, idle: Boolean) {
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = MainHeight)
-                .toggleable(st.strobe == true, st.strobe != null, Role.Switch) { s.client.setStrobe(it) }
+                .toggleable(st.strobe == true, st.strobe != null && idle, Role.Switch) { s.client.setStrobe(it) }
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Strobe", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            Switch(st.strobe == true, null, enabled = st.strobe != null)
+            Switch(st.strobe == true, null, enabled = st.strobe != null && idle)
         }
     }
 }
 
 @Composable
-private fun ModeCard(s: Session, st: DeviceState) {
+private fun ModeCard(s: Session, st: DeviceState, idle: Boolean) {
     val cur = st.settings
-    val ok = cur != null && cur.extended
+    val ok = cur != null && cur.extended && idle
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Mode", style = MaterialTheme.typography.titleLarge)
@@ -96,11 +99,11 @@ private fun ModeCard(s: Session, st: DeviceState) {
                 Text("Update the firmware to use the motion mode.", style = MaterialTheme.typography.bodySmall)
             } else if (cur.motion) {
                 Text("Slow down after", style = MaterialTheme.typography.titleMedium)
-                ChoiceChips(DELAYS, cur.motionDelayS) { v -> s.client.updateSettings { it.copy(motionDelayS = v) } }
+                ChoiceChips(DELAYS, cur.motionDelayS, idle) { v -> s.client.updateSettings { it.copy(motionDelayS = v) } }
                 if (cur.perActivity) {
                     ACTIVITY_NAMES.forEachIndexed { level, name ->
                         Text(name, style = MaterialTheme.typography.titleMedium)
-                        ChoiceChips(LEVEL_SPEEDS, cur.motionSpeeds[level]) { v ->
+                        ChoiceChips(LEVEL_SPEEDS, cur.motionSpeeds[level], idle) { v ->
                             s.client.updateSettings { it.copy(motionSpeeds = it.motionSpeeds.toMutableList().also { l -> l[level] = v }) }
                         }
                     }
@@ -180,13 +183,13 @@ private fun BatteryWidget(level: Int?, charger: Int?) {
 }
 
 @Composable
-private fun FanCard(s: Session, st: DeviceState) {
+private fun FanCard(s: Session, st: DeviceState, idle: Boolean) {
     var drag by remember { mutableStateOf<Float?>(null) }
     val target = st.fan ?: 0
     // The big number is what the fan runs at; in motion mode the target is the one of the current activity.
     val actual = st.fanActual ?: target
     val shown = drag ?: actual.toFloat()
-    val enabled = st.fan != null
+    val enabled = st.fan != null && idle
     val step = st.settings?.fanStep ?: 5
     val button = Modifier.heightIn(min = MainHeight).widthIn(min = 88.dp)
     Card(Modifier.fillMaxWidth()) {

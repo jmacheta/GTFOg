@@ -58,6 +58,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
     val ctx = LocalContext.current
     val stats by s.stats.collectAsStateWithLifecycle()
     val rec by s.rec.collectAsStateWithLifecycle()
+    val dfu by s.dfu.state.collectAsStateWithLifecycle()
     val recError by s.recError.collectAsStateWithLifecycle()
     var windowS by rememberSaveable { mutableStateOf(10) }
     var range by rememberSaveable { mutableStateOf<Double?>(null) }
@@ -92,7 +93,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val canLive = st.conn == Conn.Connected
+            val canLive = st.conn == Conn.Connected && !dfu.running
             Row(
                 Modifier.toggleable(st.live, canLive, Role.Switch) { s.setLive(it) }.heightIn(min = TouchHeight),
                 verticalAlignment = Alignment.CenterVertically,
@@ -108,7 +109,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
             ChoiceChips(RANGES.map { (it?.let { r -> "±${r.toInt()} g" } ?: "auto") to it }, range) { range = it }
             AccelChart(s.ring, windowS, range, tick, "Accelerometer chart, last $windowS s, |a| ${String.format(Locale.US, "%.2f", mag)} g")
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                AXIS_NAMES.forEachIndexed { i, n ->
+                AXIS_LEGEND.forEachIndexed { i, n ->
                     Swatch(AXIS_COLORS[i]); Text(n)
                 }
             }
@@ -116,6 +117,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
                 String.format(Locale.US, "|a| %.2f g   %.0f samples/s   lost frames %d", mag, rate, stats.lost),
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (dfu.running) Text("Live and Record are off during a firmware update.", style = MaterialTheme.typography.bodySmall)
             recError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (rec.active) {
@@ -128,7 +130,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
                             ) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS) else s.startRecording()
                         },
                         Modifier.heightIn(min = TouchHeight),
-                        enabled = st.conn == Conn.Connected,
+                        enabled = canLive,
                     ) { Text("Record") }
                 }
                 if (rec.file.isNotEmpty()) {

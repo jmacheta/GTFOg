@@ -124,6 +124,9 @@ fun dfuBlockReason(battery: Int?): String? = when {
     else -> null
 }
 
+/** Fan speed one step up (dir 1) or down (dir -1), kept within 0..100 %. */
+fun stepFan(fan: Int, dir: Int, step: Int) = (fan + dir * step).coerceIn(0, 100)
+
 /** Human-readable text for a BluetoothGatt connection status. */
 fun gattErrorText(status: Int): String = when (status) {
     8 -> "Out of range"

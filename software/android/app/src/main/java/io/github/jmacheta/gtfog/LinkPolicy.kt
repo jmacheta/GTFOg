@@ -3,6 +3,9 @@ package io.github.jmacheta.gtfog
 private const val FIRST_CONNECT_RETRIES = 3 // status 133 on the first direct connect is a common Android flake
 private const val EARLY_DROPS = 3 // bonded phone, link dropped before the services were found
 
+/** Only the statuses of an ordinary disconnect count as early drops; 8, 62, 133 are range and radio problems, not a bad key. */
+private val EARLY_DROP_STATUSES = setOf(0, 19, 22)
+
 /** What [GtfogClient] does after a link problem. */
 enum class Next { AuthFailed, Reconnect, RetryFirst, GiveUp, NotGtfog }
 
@@ -36,7 +39,7 @@ class LinkPolicy {
 
     /** The GATT link ended with [status]; [up] = it had connected but the services were not ready, [bonded] = the phone has a bond. */
     fun onDisconnect(status: Int, up: Boolean, bonded: Boolean): Next {
-        val early = up && bonded && ++earlyDrops >= EARLY_DROPS
+        val early = up && bonded && status in EARLY_DROP_STATUSES && ++earlyDrops >= EARLY_DROPS
         return if (isAuthFailure(status) || early) Next.AuthFailed else onLost(status == 133)
     }
 

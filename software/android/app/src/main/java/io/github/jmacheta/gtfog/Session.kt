@@ -182,7 +182,7 @@ class Session(private val app: Application) {
             runCatching { writer = File(dir, name).bufferedWriter() }.onSuccess { handler.post(::refreshRecordings) }.onFailure(::recordingFailed)
         }
         val d = client.state.value
-        val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=100 Hz"
+        val info = "app=GTFOg ${BuildConfig.VERSION_NAME}, device=${d.model ?: "?"} by ${d.manufacturer ?: "?"} ${d.address}, rate=${ring.rateHz} Hz"
         write(csvPreamble(ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME), info))
         rec.value = RecState(name, now.time, 0, 0, true)
         if (!d.live) setLive(true)

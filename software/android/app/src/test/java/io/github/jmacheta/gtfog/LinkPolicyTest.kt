@@ -2,6 +2,7 @@ package io.github.jmacheta.gtfog
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,11 +11,32 @@ class LinkPolicyTest {
     @Test
     fun earlyDropsOfBondedPhoneMeanStaleBond() {
         val p = LinkPolicy()
-        assertEquals(Next.GiveUp, p.onDisconnect(8, up = true, bonded = false)) // not bonded: never counted
-        p.reset()
-        assertEquals(Next.GiveUp, p.onDisconnect(8, up = true, bonded = true))
-        assertEquals(Next.GiveUp, p.onDisconnect(8, up = true, bonded = true))
-        assertEquals(Next.AuthFailed, p.onDisconnect(8, up = true, bonded = true))
+        assertEquals(Next.GiveUp, p.onDisconnect(19, up = true, bonded = false)) // not bonded: never counted
+        for (s in listOf(0, 19, 22)) {
+            p.reset()
+            assertEquals(Next.GiveUp, p.onDisconnect(s, up = true, bonded = true))
+            assertEquals(Next.GiveUp, p.onDisconnect(s, up = true, bonded = true))
+            assertEquals(Next.AuthFailed, p.onDisconnect(s, up = true, bonded = true))
+        }
+    }
+
+    @Test
+    fun earlyDropsWithRangeOrRadioStatusesAreNotAStaleBond() {
+        for (s in listOf(8, 62, 133)) {
+            val p = LinkPolicy()
+            repeat(5) { assertNotEquals(Next.AuthFailed, p.onDisconnect(s, up = true, bonded = true)) }
+        }
+        val p = LinkPolicy() // they do not add to the count either
+        repeat(2) { p.onDisconnect(19, up = true, bonded = true) }
+        p.onDisconnect(8, up = true, bonded = true)
+        assertEquals(Next.AuthFailed, p.onDisconnect(19, up = true, bonded = true))
+    }
+
+    @Test
+    fun unknownStatusAfterReadyReconnects() {
+        val p = LinkPolicy()
+        p.ready()
+        assertEquals(Next.Reconnect, p.onDisconnect(62, up = false, bonded = true))
     }
 
     @Test
@@ -26,12 +48,12 @@ class LinkPolicyTest {
     @Test
     fun readyResetsEarlyDropsAndSwitchesToReconnect() {
         val p = LinkPolicy()
-        p.onDisconnect(8, up = true, bonded = true)
-        p.onDisconnect(8, up = true, bonded = true)
+        p.onDisconnect(19, up = true, bonded = true)
+        p.onDisconnect(19, up = true, bonded = true)
         p.ready()
         assertTrue(p.everConnected)
-        assertEquals(Next.Reconnect, p.onDisconnect(8, up = true, bonded = true))
-        assertEquals(Next.Reconnect, p.onDisconnect(8, up = true, bonded = true))
+        assertEquals(Next.Reconnect, p.onDisconnect(19, up = true, bonded = true))
+        assertEquals(Next.Reconnect, p.onDisconnect(19, up = true, bonded = true))
     }
 
     @Test
