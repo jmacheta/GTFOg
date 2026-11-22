@@ -39,8 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -62,8 +60,9 @@ fun DeviceScreen(s: Session, st: DeviceState) {
     val snackbar = remember { SnackbarHostState() }
     // Leaving mid-update is not allowed (Back, Disconnect); on another tab Back goes to Control first.
     BackHandler(dfu.running || tab != 0) { if (!dfu.running) tab = 0 }
-    st.notice?.let { n ->
-        LaunchedEffect(n) {
+    // Keyed on the counter: the same failure again while the snackbar is up shows (and is cleared) as a new notice.
+    LaunchedEffect(st.noticeSeq) {
+        st.notice?.let { n ->
             snackbar.showSnackbar(n)
             s.client.clearNotice()
         }
@@ -95,7 +94,7 @@ fun DeviceScreen(s: Session, st: DeviceState) {
         bottomBar = {
             NavigationBar(windowInsets = WindowInsets(0)) {
                 TABS.forEachIndexed { i, n ->
-                    NavigationBarItem(tab == i, { tab = i }, { TabIcon(i, n) }, label = { Text(n) })
+                    NavigationBarItem(tab == i, { tab = i }, { TabIcon(i) }, label = { Text(n) })
                 }
             }
         },
@@ -140,9 +139,9 @@ private fun Offline(s: Session, st: DeviceState) {
 
 // Tiny Canvas icons so the app needs no icon library.
 @Composable
-private fun TabIcon(i: Int, description: String) {
+private fun TabIcon(i: Int) { // decorative: the label next to it is read
     val c = LocalContentColor.current
-    Canvas(Modifier.size(24.dp).semantics { contentDescription = description }) {
+    Canvas(Modifier.size(24.dp)) {
         val st = Stroke(2.dp.toPx())
         val w = size.width
         when (i) {

@@ -149,7 +149,14 @@ class ProtocolTest {
 
     @Test
     fun settingsRejectWrongSize() {
-        for (n in listOf(0, 1, 3, 4, 5, 7, 9)) assertNull(parseSettings(ByteArray(n)))
+        for (n in listOf(0, 1, 3, 4, 5, 7)) assertNull(parseSettings(ByteArray(n)))
+    }
+
+    @Test
+    fun settingsIgnoreTrailingBytes() {
+        val s = parseSettings(byteArrayOf(2, 60, 10, 1, 120, 0, 10, 90, 7, 7))!!
+        assertEquals(DeviceSettings(false, true, 60, 10, true, 120, listOf(0, 10, 90)), s)
+        assertEquals(8, s.encode().size)
     }
 
     @Test
@@ -159,7 +166,7 @@ class ProtocolTest {
         assertEquals(FanActual(50, null), parseFanActual(byteArrayOf(50, -1))) // 255: manual mode
         assertEquals(FanActual(50, null), parseFanActual(byteArrayOf(50))) // firmware 0.3.0 and 0.3.1
         assertNull(parseFanActual(ByteArray(0)))
-        assertNull(parseFanActual(ByteArray(3)))
+        assertEquals(FanActual(80, 2), parseFanActual(byteArrayOf(80, 2, 9, 9))) // future firmware
     }
 
     @Test

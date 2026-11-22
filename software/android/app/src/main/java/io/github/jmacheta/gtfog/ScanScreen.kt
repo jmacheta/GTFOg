@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -155,7 +156,7 @@ fun ScanScreen(s: Session, st: DeviceState) {
                 )
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(items, key = { it.address }) {
-                        Card(Modifier.fillMaxWidth().heightIn(min = MainHeight).clickable { s.connect(it) }) {
+                        Card(Modifier.fillMaxWidth().heightIn(min = MainHeight).clickable(onClickLabel = "Connect", role = Role.Button) { s.connect(it) }) {
                             Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Column(Modifier.weight(1f)) {
                                     Text(it.label, style = MaterialTheme.typography.titleMedium)

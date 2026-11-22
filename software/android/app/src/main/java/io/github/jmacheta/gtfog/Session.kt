@@ -14,9 +14,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.io.BufferedWriter
 import java.io.File
 import java.text.SimpleDateFormat
@@ -75,6 +77,8 @@ class Session(private val app: Application) {
 
     init {
         refreshRecordings()
+        // The link ended (also closed by the client: bad bond, not a GTFOg, failed first connect): nothing to record any more.
+        MainScope().launch { client.state.collect { if (it.conn == Conn.Idle) stopRecording() } }
     }
 
     private val scanCallback = object : ScanCallback() {

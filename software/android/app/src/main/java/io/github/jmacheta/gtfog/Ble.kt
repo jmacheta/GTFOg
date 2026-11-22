@@ -26,6 +26,11 @@ import java.util.UUID
 enum class Conn { Idle, Connecting, Connected, Reconnecting, Disconnected }
 
 private const val CONNECT_TIMEOUT_MS = 15_000L
+private const val FIRST_CONNECT_RETRIES = 3 // status 133 on the first direct connect is a common Android flake
+private const val EARLY_DROPS = 3 // bonded phone, link dropped before the services were found
+
+const val PAIR_MESSAGE =
+    "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again"
 
 const val BOND_MESSAGE = "The goggles forgot this phone. Remove GTFOg in Android Bluetooth settings, then connect again"
 
@@ -49,6 +54,8 @@ data class DeviceState(
     val mtu: Int? = null,
     /** Short message about a failed write; the UI shows it once and calls [GtfogClient.clearNotice]. */
     val notice: String? = null,
+    /** Counts notices, so the UI can tell a repeated identical [notice] from the old one. */
+    val noticeSeq: Int = 0,
     /** The bond with the goggles is bad: [error] says what to do, the UI offers the Bluetooth settings. */
     val bondProblem: Boolean = false,
 )
@@ -82,6 +89,9 @@ class GtfogClient(
     private var device: BluetoothDevice? = null
     private var wantConnected = false
     private var everConnected = false
+    private var up = false // GATT link is up but the services are not ready yet
+    private var firstFails = 0
+    private var earlyDrops = 0
     private var live = false
     private var chars = emptyMap<UUID, BluetoothGattCharacteristic>()
     private val timer = object : Timer {
@@ -91,7 +101,7 @@ class GtfogClient(
 
         override fun remove(r: Runnable) = handler.removeCallbacks(r)
     }
-    private val ops = OpQueue(timer, { device?.bondState == BluetoothDevice.BOND_BONDING }, ::authFailed)
+    private val ops = OpQueue(timer, { device?.bondState == BluetoothDevice.BOND_BONDING }, { authFailed(isBonded()) })
     private val backoff = Backoff()
 
     // Writes queued or in flight per characteristic. While any exist, notifications and reads of that
@@ -100,7 +110,9 @@ class GtfogClient(
 
     private val connectTimeout = Runnable { lost("Could not connect, try again") }
 
-    private val reopen = Runnable { if (wantConnected && gatt == null) open(true) }
+    private val reopen = Runnable { if (wantConnected && gatt == null) open(everConnected) }
+
+    private fun isBonded() = device?.bondState == BluetoothDevice.BOND_BONDED
 
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -117,7 +129,10 @@ class GtfogClient(
             val d = IntentCompat.getParcelableExtra(i, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
             if (d?.address != device?.address) return
             val prev = i.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
-            if (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_NONE && prev != BluetoothDevice.BOND_NONE) authFailed()
+            // BONDED -> NONE: the phone had a bond that is gone; BONDING -> NONE: a new pairing was cancelled or refused.
+            if (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_NONE && prev != BluetoothDevice.BOND_NONE) {
+                authFailed(prev == BluetoothDevice.BOND_BONDED)
+            }
         }
     }
 
@@ -132,6 +147,8 @@ class GtfogClient(
         device = d
         wantConnected = true
         everConnected = false
+        firstFails = 0
+        earlyDrops = 0
         backoff.reset()
         _state.value = DeviceState(Conn.Connecting, name, d.address)
         open(false)
@@ -171,30 +188,36 @@ class GtfogClient(
         handler.removeCallbacks(connectTimeout)
         handler.removeCallbacks(reopen)
         clearQueue()
+        up = false
         gatt?.close()
         gatt = null
     }
 
     /** The link is gone or never came up: retry in the background if it had worked before, else report. */
-    private fun lost(message: String) {
+    private fun lost(message: String, retryFirst: Boolean = false) {
         teardown()
         if (wantConnected && everConnected) {
             _state.update { it.copy(conn = Conn.Reconnecting, error = null) }
             handler.postDelayed(reopen, backoff.next())
+        } else if (wantConnected && retryFirst && firstFails++ < FIRST_CONNECT_RETRIES) {
+            handler.postDelayed(reopen, backoff.next()) // still "Connecting"
         } else {
             wantConnected = false
             _state.value = DeviceState(error = message)
         }
     }
 
-    /** Authentication or encryption keeps failing: stop and tell the user how to fix the bond. */
-    private fun authFailed() {
+    /**
+     * Authentication or encryption keeps failing: stop and tell the user what to do. With [hadBond] the goggles lost
+     * the phone's key (remove the bond); without, a new pairing was refused or cancelled.
+     */
+    private fun authFailed(hadBond: Boolean) {
         if (!wantConnected) return
         wantConnected = false
         live = false
         gatt?.disconnect()
         teardown()
-        _state.value = DeviceState(error = BOND_MESSAGE, bondProblem = true)
+        _state.value = DeviceState(error = if (hadBond) BOND_MESSAGE else PAIR_MESSAGE, bondProblem = hadBond)
     }
 
     fun setFan(percent: Int) {
@@ -239,11 +262,11 @@ class GtfogClient(
         pendingWrites.clear()
     }
 
-    private fun enqueue(onEnd: (Int) -> Unit = {}, run: () -> Boolean) = ops.enqueue(Op(run, onEnd))
+    private fun enqueue(key: Any? = null, onEnd: (Int) -> Unit = {}, run: () -> Boolean) = ops.enqueue(Op(run, onEnd, key))
 
     private fun read(u: UUID) {
         val c = chars[u] ?: return
-        enqueue { gatt?.readCharacteristic(c) == true }
+        enqueue(key = u) { gatt?.readCharacteristic(c) == true }
     }
 
     private fun write(u: UUID, v: Int) = write(u, byteArrayOf(v.toByte()))
@@ -251,12 +274,14 @@ class GtfogClient(
     private fun write(u: UUID, bytes: ByteArray) {
         val c = chars[u] ?: return
         pendingWrites[u] = (pendingWrites[u] ?: 0) + 1
-        enqueue({ status ->
+        enqueue(u, { status ->
             writeDone(u)
-            if (status != 0) { // never reached the device: show what it really has
+            // Read back what the device really has (it may clamp or adjust the value); after the last write of a burst only.
+            if (u !in pendingWrites) {
                 read(u)
-                _state.update { it.copy(notice = "Could not change ${charName(u)}") }
+                if (u == Uuids.FAN) read(Uuids.FAN_ACTUAL)
             }
+            if (status != 0) _state.update { it.copy(notice = "Could not change ${charName(u)}", noticeSeq = it.noticeSeq + 1) }
         }) {
             c.value = bytes
             c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -273,17 +298,21 @@ class GtfogClient(
         val c = chars[u] ?: return
         gatt?.setCharacteristicNotification(c, on)
         val d = c.getDescriptor(Uuids.CCCD) ?: return
-        enqueue {
+        enqueue(cccdKey(u)) {
             d.value = if (on) android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             else android.bluetooth.BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
             gatt?.writeDescriptor(d) == true
         }
     }
 
+    private fun cccdKey(u: UUID) = "cccd $u"
+
     private fun setup() {
         handler.removeCallbacks(connectTimeout)
         val reconnected = everConnected
         everConnected = true
+        up = false
+        earlyDrops = 0
         backoff.reset()
         _state.update { it.copy(conn = Conn.Connected, error = null) }
         listOf(Uuids.FAN, Uuids.FAN_ACTUAL, Uuids.STROBE, Uuids.CHARGER, Uuids.BATTERY, Uuids.SETTINGS).forEach { notify(it, true) }
@@ -324,6 +353,7 @@ class GtfogClient(
             if (g !== gatt) return
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 clearQueue()
+                up = true
                 // Connected (also after autoConnect): MTU and discovery must follow within the deadline.
                 handler.removeCallbacks(connectTimeout)
                 handler.postDelayed(connectTimeout, CONNECT_TIMEOUT_MS)
@@ -333,7 +363,9 @@ class GtfogClient(
                     g.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                if (isAuthFailure(status)) authFailed() else lost(gattErrorText(status))
+                // A bonded phone whose link keeps dropping before the services are found: the goggles most likely lost the key.
+                val early = up && isBonded() && ++earlyDrops >= EARLY_DROPS
+                if (isAuthFailure(status) || early) authFailed(isBonded()) else lost(gattErrorText(status), retryFirst = status == 133)
             }
         }
 
@@ -357,16 +389,16 @@ class GtfogClient(
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             if (g !== gatt) return
             if (status == 0) onValue(c.uuid, c.value ?: ByteArray(0))
-            ops.finish(status)
+            ops.finish(status, c.uuid)
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             if (g !== gatt) return
-            ops.finish(status)
+            ops.finish(status, c.uuid)
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: android.bluetooth.BluetoothGattDescriptor, status: Int) {
-            if (g === gatt) ops.finish(status)
+            if (g === gatt) ops.finish(status, cccdKey(d.characteristic.uuid))
         }
 
         // API 33+ passes the value; the older callbacks read it from the shared characteristic object.
@@ -377,7 +409,7 @@ class GtfogClient(
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
             if (g !== gatt) return
             if (status == 0) onValue(c.uuid, value)
-            ops.finish(status)
+            ops.finish(status, c.uuid)
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {

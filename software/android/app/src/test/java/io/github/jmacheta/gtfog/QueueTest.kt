@@ -92,6 +92,17 @@ class QueueTest {
     }
 
     @Test
+    fun lateCallbackOfTimedOutOpIsIgnored() {
+        q.enqueue(Op({ log += "run a"; true }, { log += "end a $it" }, "a")); q.enqueue(Op({ log += "run b"; true }, { log += "end b $it" }, "b"))
+        timer.advance(5_000)
+        assertEquals(listOf("run a", "end a $OP_TIMEOUT", "run b"), log)
+        q.finish(0, "a") // the late answer of a
+        assertTrue(q.busy)
+        q.finish(0, "b")
+        assertEquals("end b 0", log.last())
+    }
+
+    @Test
     fun refusedOperationEndsAndNextRuns() {
         q.enqueue(op("a", start = false)); q.enqueue(op("b"))
         assertEquals(listOf("run a", "end a $OP_NOT_STARTED", "run b"), log)

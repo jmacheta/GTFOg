@@ -41,7 +41,7 @@ class RecordService : Service() {
         ServiceCompat.startForeground(this, ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager::class.java)
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gtfog:record").also { it.acquire() }
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gtfog:record").also { it.acquire(WAKE_LOCK_MS) }
         }
         job?.cancel()
         job = scope.launch {
@@ -79,6 +79,7 @@ class RecordService : Service() {
     }
 
     companion object {
+        private const val WAKE_LOCK_MS = 4 * 3600_000L // safety net; a longer recording keeps running, the CPU may sleep
         private const val ID = 1
         private const val CHANNEL = "recording"
         private const val ACTION_STOP = "io.github.jmacheta.gtfog.STOP"

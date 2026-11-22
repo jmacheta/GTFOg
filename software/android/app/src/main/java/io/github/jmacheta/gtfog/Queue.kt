@@ -18,8 +18,11 @@ interface Timer {
     fun remove(r: Runnable)
 }
 
-/** [run] starts the GATT call (false: refused); [onEnd] gets the final status exactly once (not for retried ones). */
-class Op(val run: () -> Boolean, val onEnd: (Int) -> Unit = {}) {
+/**
+ * [run] starts the GATT call (false: refused); [onEnd] gets the final status exactly once (not for retried ones).
+ * [key] names what the call is about (characteristic or descriptor): a callback with another key is a late one of an abandoned op.
+ */
+class Op(val run: () -> Boolean, val onEnd: (Int) -> Unit = {}, val key: Any? = null) {
     var tries = 0
 }
 
@@ -41,7 +44,6 @@ class OpQueue(
 
     val busy get() = cur != null
 
-    // ponytail: a late callback of an abandoned operation completes the next one; the queue is cleared on every disconnect.
     private val timeout = object : Runnable {
         override fun run() {
             val op = cur ?: return
@@ -61,9 +63,10 @@ class OpQueue(
         cur = null
     }
 
-    /** A GATT callback arrived for the current operation. */
-    fun finish(status: Int) {
+    /** A GATT callback arrived for the current operation; one whose [key] differs from the current op's is ignored. */
+    fun finish(status: Int, key: Any? = null) {
         val op = cur ?: return
+        if (key != null && op.key != null && op.key != key) return
         if (isRetryStatus(status) && (op.tries < maxTries || isBonding())) {
             op.tries++
             timer.postDelayed({ if (cur === op) restart(op) }, retryMs)

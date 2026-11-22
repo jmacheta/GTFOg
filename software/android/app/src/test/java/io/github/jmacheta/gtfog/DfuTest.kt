@@ -10,6 +10,13 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class DfuTest {
+    @Test
+    fun zipEntryOverCapIsRejected() {
+        val z = ByteArrayOutputStream()
+        ZipOutputStream(z).use { o -> o.putNextEntry(ZipEntry("a.bin")); o.write(ByteArray(5_000_000)); o.closeEntry() }
+        assertThrows(IllegalArgumentException::class.java) { loadImage(z.toByteArray()) }
+    }
+
     private fun image(major: Int, minor: Int, rev: Int, build: Long = 0): ByteArray {
         val b = ByteArray(64)
         byteArrayOf(0x3d, 0xb8.toByte(), 0xf3.toByte(), 0x96.toByte()).copyInto(b)

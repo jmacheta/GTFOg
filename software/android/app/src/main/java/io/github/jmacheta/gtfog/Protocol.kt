@@ -80,10 +80,12 @@ data class DeviceSettings(
 }
 
 fun parseSettings(b: ByteArray): DeviceSettings? {
-    if (b.size != 2 && b.size != 6 && b.size != 8) return null
-    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = b.size)
-    if (b.size == 2) return base
-    val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < b.size) u8(b, 5 + i) else default }
+    // Longer than 8 (future firmware): the known 8 bytes are read, the rest is ignored.
+    if (b.size != 2 && b.size != 6 && b.size < 8) return null
+    val size = minOf(b.size, 8)
+    val base = DeviceSettings((u8(b, 0) and 1) != 0, (u8(b, 0) and 2) != 0, u8(b, 1), size = size)
+    if (size == 2) return base
+    val speeds = base.motionSpeeds.mapIndexed { i, default -> if (5 + i < size) u8(b, 5 + i) else default }
     // Corrupt or future firmware: keep the values in the ranges the UI and stepFan can work with.
     return base.copy(
         fanStep = u8(b, 2).coerceIn(1, 25), motion = u8(b, 3) == 1, motionDelayS = u8(b, 4).coerceIn(5, 255),
@@ -95,8 +97,8 @@ fun parseSettings(b: ByteArray): DeviceSettings? {
 data class FanActual(val percent: Int, val level: Int?)
 
 fun parseFanActual(b: ByteArray): FanActual? {
-    if (b.isEmpty() || b.size > 2) return null
-    return FanActual(u8(b, 0), if (b.size == 2 && u8(b, 1) in 0..2) u8(b, 1) else null)
+    if (b.isEmpty()) return null // longer than 2: future firmware, the extra bytes are ignored
+    return FanActual(u8(b, 0), if (b.size >= 2 && u8(b, 1) in 0..2) u8(b, 1) else null)
 }
 
 val ACTIVITY_NAMES = listOf("Still", "Walking", "Running")

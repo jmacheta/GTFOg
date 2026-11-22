@@ -61,7 +61,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
     val recError by s.recError.collectAsStateWithLifecycle()
     var windowS by rememberSaveable { mutableStateOf(10) }
     var range by rememberSaveable { mutableStateOf<Double?>(null) }
-    var tick by remember { mutableLongStateOf(0) }
+    val tick = remember { mutableLongStateOf(0) }
     var nowSec by remember { mutableLongStateOf(0) }
     var mag by remember { mutableStateOf(0.0) }
     var rate by remember { mutableStateOf(0.0) }
@@ -72,13 +72,18 @@ private fun AccelCard(s: Session, st: DeviceState) {
     val active = st.live || rec.active
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(active) {
+        var textAt = 0L
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 val now = System.currentTimeMillis()
-                tick = now
-                nowSec = now / 1000
-                mag = Math.round((s.ring.last()?.let(::magnitudeG) ?: 0.0) * 100) / 100.0
-                rate = meter.update(now, s.stats.value.samples)
+                tick.longValue = now
+                // The texts change at 4 Hz at most; only the chart redraws every frame.
+                if (!active || now - textAt >= 250) {
+                    textAt = now
+                    nowSec = now / 1000
+                    mag = Math.round((s.ring.last()?.let(::magnitudeG) ?: 0.0) * 100) / 100.0
+                    rate = meter.update(now, s.stats.value.samples)
+                }
                 if (!active) break
                 delay(33)
             }
@@ -101,7 +106,7 @@ private fun AccelCard(s: Session, st: DeviceState) {
             }
             ChoiceChips(WINDOWS.map { "$it s" to it }, windowS) { windowS = it }
             ChoiceChips(RANGES.map { (it?.let { r -> "±${r.toInt()} g" } ?: "auto") to it }, range) { range = it }
-            AccelChart(s.ring, windowS, range, tick)
+            AccelChart(s.ring, windowS, range, tick, "Accelerometer chart, last $windowS s, |a| ${String.format(Locale.US, "%.2f", mag)} g")
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 AXIS_NAMES.forEachIndexed { i, n ->
                     Swatch(AXIS_COLORS[i]); Text(n)

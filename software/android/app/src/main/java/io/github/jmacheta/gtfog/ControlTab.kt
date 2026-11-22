@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
@@ -206,7 +208,8 @@ private fun FanCard(s: Session, st: DeviceState) {
                     onValueChangeFinished = { drag?.let { s.client.setFan(it.roundToInt()) }; drag = null },
                     valueRange = 0f..100f,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                        .semantics { contentDescription = "Fan speed"; stateDescription = "${shown.roundToInt()} percent" },
                 )
                 FilledTonalButton({ s.client.stepFan(1) }, button, enabled = enabled) { Text("+$step %", style = MaterialTheme.typography.titleLarge) }
             }

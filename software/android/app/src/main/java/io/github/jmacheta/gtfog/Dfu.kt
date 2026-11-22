@@ -23,6 +23,8 @@ import io.runtime.mcumgr.exception.McuMgrException
 import io.runtime.mcumgr.managers.ImageManager
 import io.runtime.mcumgr.response.img.McuMgrImageStateResponse
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.zip.ZipInputStream
 
 private const val IMAGE_MAGIC = 0x96f3b83dL
@@ -39,6 +41,20 @@ fun parseImageVersion(b: ByteArray): String? {
     return "${u8(20)}.${u8(21)}.$rev" + if (build != 0L) "+$build" else ""
 }
 
+private const val MAX_IMAGE = 4_000_000
+
+/** Reads at most [max] bytes (a small zip can inflate far beyond its size). */
+private fun InputStream.readCapped(max: Int): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(8192)
+    while (true) {
+        val n = read(buf)
+        if (n < 0) return out.toByteArray()
+        out.write(buf, 0, n)
+        require(out.size() <= max) { "File too large (over 4 MB)" }
+    }
+}
+
 /** The signed image from a raw `.bin` or from an NCS `dfu_application.zip` (its single `.bin` entry). */
 fun loadImage(data: ByteArray): ByteArray {
     val bin = if (data.size > 4 && data[0] == 'P'.code.toByte() && data[1] == 'K'.code.toByte()) {
@@ -46,7 +62,7 @@ fun loadImage(data: ByteArray): ByteArray {
         ZipInputStream(ByteArrayInputStream(data)).use { z ->
             while (true) {
                 val e = z.nextEntry ?: break
-                if (!e.isDirectory && e.name.endsWith(".bin", ignoreCase = true)) bins += z.readBytes()
+                if (!e.isDirectory && e.name.endsWith(".bin", ignoreCase = true)) bins += z.readCapped(MAX_IMAGE)
             }
         }
         require(bins.size == 1) { if (bins.isEmpty()) "No .bin file in the zip" else "More than one .bin file in the zip" }
@@ -102,7 +118,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
     fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
 
     /** Reads the version of slot 0 from the device (one read at a time; the error is shown in the card). */
-    fun refresh() {
+    fun refresh(attempt: Int = 0) {
         val device = client.currentDevice() ?: return
         if (_state.value.running || refreshing) return
         refreshing = true
@@ -115,9 +131,17 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
             t.release()
             _state.update(f)
         }
+        // A failed read is tried again twice (the first access may only trigger pairing or a slow link).
+        fun fail(text: String) {
+            done { it.copy(refreshError = text) }
+            if (attempt < 2) scope.launch {
+                delay(3_000)
+                if (client.state.value.conn == Conn.Connected && _state.value.installed == null) refresh(attempt + 1)
+            }
+        }
         timeout = scope.launch {
             delay(30_000)
-            done { it.copy(refreshError = "no answer") }
+            fail("no answer")
         }
         ImageManager(t).list(object : McuMgrCallback<McuMgrImageStateResponse> {
             override fun onResponse(response: McuMgrImageStateResponse) {
@@ -125,7 +149,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
                 done { it.copy(installed = v, refreshError = if (v == null) "no image in slot 0" else null) }
             }
 
-            override fun onError(error: McuMgrException) = done { it.copy(refreshError = error.message ?: "error") }
+            override fun onError(error: McuMgrException) = fail(error.message ?: "error")
         })
     }
 
@@ -169,18 +193,15 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
             override fun onUpgradeCompleted() {
                 // The file's version is not proof: wait for the goggles to be back, then ask them what runs.
                 finish { it.copy(status = "Done", percent = 100, done = true, installed = null) }
-                scope.launch {
-                    withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } }
-                    refresh()
-                }
+                refreshWhenBack()
             }
 
             override fun onUpgradeFailed(state: State, error: McuMgrException) = finish {
                 it.copy(
-                    error = "Update interrupted. The goggles keep the old firmware; reconnect and try again.",
+                    error = "Update failed. The goggles keep running the firmware they started with; check the version after reconnecting.",
                     detail = "Failed while ${state.name.lowercase()}: ${error.message}",
                 )
-            }
+            }.also { if (state == State.RESET || state == State.CONFIRM) refreshWhenBack() }
 
             override fun onUpgradeCanceled(state: State) = finish { it.copy(error = "Update canceled") }
 
@@ -201,6 +222,14 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
                     .build(),
             )
         }.onFailure { e -> finish { it.copy(error = e.message ?: "Cannot start the update", detail = null) } }
+    }
+
+    /** Waits (at most 60 s) until the goggles are connected again, then reads the installed version. */
+    private fun refreshWhenBack() {
+        scope.launch {
+            withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } }
+            refresh()
+        }
     }
 
     fun cancel() {

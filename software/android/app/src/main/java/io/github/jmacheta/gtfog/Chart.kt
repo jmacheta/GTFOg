@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LongState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -15,6 +16,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -35,13 +38,13 @@ fun Swatch(color: Color) {
 }
 
 @Composable
-fun AccelChart(ring: SampleRing, windowS: Int, rangeG: Double?, tick: Long) {
+fun AccelChart(ring: SampleRing, windowS: Int, rangeG: Double?, tick: LongState, description: String) {
     val bufs = remember { Array(3) { IntArray(3000) } }
     val measurer = rememberTextMeasurer()
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val textStyle = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Canvas(Modifier.fillMaxWidth().height(240.dp)) {
-        tick // redraw trigger, set at most every 33 ms
+    Canvas(Modifier.fillMaxWidth().height(240.dp).semantics { contentDescription = description }) {
+        tick.longValue // read only here: a new tick redraws the chart, not the whole card
         val n = windowS * 100
         val m = ring.snapshot(n, bufs)
         var peak = 0
