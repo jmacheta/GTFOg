@@ -204,7 +204,7 @@ private fun FanCard(s: Session, st: DeviceState, idle: Boolean) {
                 Text("Target $target %", Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalButton({ s.client.stepFan(-1) }, button, enabled = enabled) { Text("−$step %", style = MaterialTheme.typography.titleLarge) }
+                FilledTonalButton({ s.client.stepFan(-1) }, button.semantics { contentDescription = "Fan slower by $step percent" }, enabled = enabled) { Text("−$step %", style = MaterialTheme.typography.titleLarge) }
                 Slider(
                     value = drag ?: target.toFloat(),
                     onValueChange = { drag = it },
@@ -214,7 +214,7 @@ private fun FanCard(s: Session, st: DeviceState, idle: Boolean) {
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                         .semantics { contentDescription = "Fan speed"; stateDescription = "${shown.roundToInt()} percent" },
                 )
-                FilledTonalButton({ s.client.stepFan(1) }, button, enabled = enabled) { Text("+$step %", style = MaterialTheme.typography.titleLarge) }
+                FilledTonalButton({ s.client.stepFan(1) }, button.semantics { contentDescription = "Fan faster by $step percent" }, enabled = enabled) { Text("+$step %", style = MaterialTheme.typography.titleLarge) }
             }
         }
     }

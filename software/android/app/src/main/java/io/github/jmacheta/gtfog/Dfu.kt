@@ -2,6 +2,7 @@ package io.github.jmacheta.gtfog
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.SystemClock
 import io.runtime.mcumgr.McuMgrCallback
 import io.runtime.mcumgr.ble.McuMgrBleTransport
 import io.runtime.mcumgr.dfu.FirmwareUpgradeCallback
@@ -26,9 +27,16 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 
 private const val IMAGE_MAGIC = 0x96f3b83dL
+private const val STALL_MS = 90_000L // longer than the reset phase (swap time 20 s plus reconnect)
+private const val UPDATE_FAILED =
+    "Update failed. The goggles keep running the firmware they started with; check the version after reconnecting."
+
+/** True when mcumgr has shown no sign of life for [STALL_MS] (the update is then failed by the watchdog). */
+fun stalled(lastMs: Long, nowMs: Long, limitMs: Long = STALL_MS) = nowMs - lastMs >= limitMs
 
 /** MCUboot version from the image header (offset 20), formatted like mcumgr: major.minor.revision[+build]. */
 fun parseImageVersion(b: ByteArray): String? {
@@ -75,8 +83,9 @@ fun loadImage(data: ByteArray): ByteArray {
     return bin
 }
 
+// The device reports the build number as "0.3.8.1", the image header as "0.3.8+1".
 private fun versionParts(v: String): List<Long>? =
-    Regex("""(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?""").matchEntire(v)?.groupValues?.drop(1)?.map { it.toLongOrNull() ?: 0L }
+    Regex("""(\d+)\.(\d+)\.(\d+)(?:[+.](\d+))?""").matchEntire(v)?.groupValues?.drop(1)?.map { it.toLongOrNull() ?: 0L }
 
 /** Hint when the file is not newer than what runs on the device; null if newer or not comparable. */
 fun versionHint(installed: String?, file: String?): String? {
@@ -132,13 +141,14 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     // The mcumgr callbacks run on library threads; the rest runs on the main thread.
     @Volatile private var manager: FirmwareUpgradeManager? = null
     private val refreshing = AtomicBoolean(false)
-    private var image: ByteArray? = null
+    @Volatile private var image: ByteArray? = null
 
     /** A new connection: the installed version read earlier may belong to other goggles or an older firmware. */
     fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
 
     /** Reads the version of slot 0 from the device (one read at a time; the error is shown in the card). */
     fun refresh(attempt: Int = 0) {
+        if (client.state.value.conn != Conn.Connected) return
         val device = client.currentDevice() ?: return
         if (_state.value.running || !refreshing.compareAndSet(false, true)) return
         val t = McuMgrBleTransport(ctx, device)
@@ -200,39 +210,55 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
         }
         beforeInstall()
         val t = McuMgrBleTransport(ctx, device)
-        fun finish(f: (DfuState) -> DfuState) {
+        val finished = AtomicBoolean(false) // the watchdog and the library callbacks may both end the update
+        val last = AtomicLong(SystemClock.elapsedRealtime()) // last sign of life from mcumgr
+        var watchdog: Job? = null
+        fun finish(f: (DfuState) -> DfuState): Boolean {
+            if (!finished.compareAndSet(false, true)) return false
+            watchdog?.cancel()
             t.release()
             manager = null
             _state.update { f(it.copy(running = false)) }
+            return true
         }
         val m = FirmwareUpgradeManager(t, object : FirmwareUpgradeCallback<State> {
             override fun onUpgradeStarted(controller: FirmwareUpgradeController) {}
 
             override fun onStateChanged(prevState: State, newState: State) {
+                last.set(SystemClock.elapsedRealtime())
                 _state.update { it.copy(phase = phaseOf(newState)) }
             }
 
             override fun onUpgradeCompleted() {
                 // The file's version is not proof: wait for the goggles to be back, then ask them what runs.
-                finish { it.copy(phase = DfuPhase.Done, percent = 100, done = true, installed = null) }
-                refreshWhenBack()
+                if (finish { it.copy(phase = DfuPhase.Done, percent = 100, done = true, installed = null) }) refreshWhenBack()
             }
 
-            override fun onUpgradeFailed(state: State, error: McuMgrException) = finish {
-                it.copy(
-                    error = "Update failed. The goggles keep running the firmware they started with; check the version after reconnecting.",
-                    detail = "Failed while ${state.name.lowercase()}: ${error.message}",
-                )
-            }.also { if (state == State.RESET || state == State.CONFIRM) refreshWhenBack() }
+            override fun onUpgradeFailed(state: State, error: McuMgrException) {
+                val ended = finish {
+                    it.copy(error = UPDATE_FAILED, detail = "Failed while ${state.name.lowercase()}: ${error.message}")
+                }
+                if (ended && (state == State.RESET || state == State.CONFIRM)) refreshWhenBack()
+            }
 
-            override fun onUpgradeCanceled(state: State) = finish { it.copy(error = "Update canceled") }
+            override fun onUpgradeCanceled(state: State) {
+                finish { it.copy(error = "Update canceled") }
+            }
 
             override fun onUploadProgressChanged(bytesSent: Int, imageSize: Int, timestamp: Long) {
+                last.set(SystemClock.elapsedRealtime())
                 _state.update { it.copy(percent = (bytesSent * 100L / imageSize).toInt()) }
             }
         })
         m.setMode(FirmwareUpgradeManager.Mode.TEST_AND_CONFIRM)
         manager = m
+        // mcumgr may never call back (library hang, half-open link): do not lock the app for good.
+        watchdog = scope.launch {
+            while (!stalled(last.get(), SystemClock.elapsedRealtime())) delay(5_000)
+            runCatching { m.cancel() }
+            finish { it.copy(error = UPDATE_FAILED, detail = "No answer from the goggles for ${STALL_MS / 1000} s") }
+            refreshWhenBack()
+        }
         _state.update { it.copy(running = true, phase = DfuPhase.Connecting, percent = 0, error = null, detail = null, done = false) }
         runCatching {
             m.start(
@@ -249,8 +275,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     /** Waits (at most 60 s) until the goggles are connected again, then reads the installed version. */
     private fun refreshWhenBack() {
         scope.launch {
-            withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } }
-            refresh()
+            if (withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } } != null) refresh()
         }
     }
 

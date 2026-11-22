@@ -75,11 +75,19 @@ class DfuTest {
     fun versionHint() {
         assertEquals("Same version is already installed", versionHint("0.3.5", "0.3.5"))
         assertEquals("Same version is already installed", versionHint("0.3.5+7", "0.3.5+7"))
+        assertEquals("Same version is already installed", versionHint("0.3.8.1", "0.3.8+1"))
+        assertNull(versionHint("0.3.8.1", "0.3.8+2"))
         assertEquals("Older than the installed version", versionHint("0.3.5", "0.3.4"))
         assertEquals("Older than the installed version", versionHint("1.0.0", "0.9.9"))
         assertEquals("Older than the installed version", versionHint("0.3.5+9", "0.3.5+2"))
         assertNull(versionHint("0.3.5", "0.3.6"))
         assertNull(versionHint(null, "0.3.6"))
         assertNull(versionHint("0.3.5", null))
+    }
+
+    @Test
+    fun watchdogFiresOnlyAfterTheLimit() {
+        assertEquals(false, stalled(1_000, 1_000 + 89_999))
+        assertEquals(true, stalled(1_000, 1_000 + 90_000))
     }
 }

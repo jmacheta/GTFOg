@@ -101,8 +101,12 @@ fun ScanScreen(s: Session, st: DeviceState) {
         ContextCompat.registerReceiver(ctx, rx, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         onDispose { ctx.unregisterReceiver(rx) }
     }
-    DisposableEffect(granted, btOn, locOn) {
-        if (granted && btOn) s.startScan()
+    // Scan only while the app is visible (STARTED); the DisposableEffect covers leaving the screen.
+    var started by remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { started = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { started = false }
+    DisposableEffect(granted, btOn, locOn, started) {
+        if (granted && btOn && started) s.startScan()
         onDispose { if (granted) s.stopScan() }
     }
 

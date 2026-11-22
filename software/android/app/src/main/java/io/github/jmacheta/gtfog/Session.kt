@@ -203,9 +203,9 @@ class Session(private val app: Application) {
         io.execute {
             runCatching { writer?.close() }
             writer = null
+            handler.post(::refreshRecordings) // after the close, so the listed size is final
         }
         rec.update { it.copy(active = false, endMs = System.currentTimeMillis()) }
-        refreshRecordings()
     }
 
     fun refreshRecordings() {

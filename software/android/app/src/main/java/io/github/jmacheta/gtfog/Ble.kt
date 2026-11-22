@@ -136,8 +136,19 @@ class GtfogClient(
         }
     }
 
+    // Android 15+ (API 35): a lost remote key is reported here instead of removing the bond.
+    private val keyMissingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            val d = IntentCompat.getParcelableExtra(i, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+            if (d?.address == device?.address) authFailed(true)
+        }
+    }
+
     init {
         // ponytail: never unregistered, the client lives as long as the process.
+        if (Build.VERSION.SDK_INT >= 35) {
+            ContextCompat.registerReceiver(ctx, keyMissingReceiver, IntentFilter(BluetoothDevice.ACTION_KEY_MISSING), ContextCompat.RECEIVER_NOT_EXPORTED)
+        }
         ContextCompat.registerReceiver(ctx, btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(ctx, bondReceiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
@@ -205,6 +216,7 @@ class GtfogClient(
         handler.removeCallbacks(reopen)
         clearQueue()
         up = false
+        chars = emptyMap() // a call after teardown must not queue an operation on a dead characteristic
         gatt?.close()
         gatt = null
     }
