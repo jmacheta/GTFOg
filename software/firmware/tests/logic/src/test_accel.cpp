@@ -36,3 +36,40 @@ ZTEST(accel, test_pack_layout) {
   zassert_equal(static_cast<std::int16_t>(out[8] | out[9] << 8), 0);
   zassert_equal(static_cast<std::int16_t>(out[14] | out[15] << 8), -11); // -3 counts = -11.7 mg, truncated.
 }
+
+ZTEST(accel, test_motion_detector_ignores_noise_at_rest) {
+  motion_detector detector;
+  std::array<accel_sample, 32> batch{};
+  for(int round = 0; round != 20; ++round) {
+    for(std::size_t i = 0; i != batch.size(); ++i) {
+      auto noise = static_cast<std::int16_t>((static_cast<int>(i) * 7 + round) % 9 - 4); // +-4 counts, about +-16 mg.
+      batch[i] = {noise, static_cast<std::int16_t>(-noise), static_cast<std::int16_t>(256 + noise)};
+    }
+    zassert_false(detector.update(batch));
+  }
+}
+
+ZTEST(accel, test_motion_detector_sees_movement) {
+  motion_detector detector;
+  std::array<accel_sample, 32> still{};
+  still.fill({0, 0, 256});
+  zassert_false(detector.update(still));
+  std::array<accel_sample, 32> shake = still;
+  shake[10] = {200, 0, 256}; // About 0.27 g more than at rest.
+  zassert_true(detector.update(shake));
+  zassert_false(detector.update(still));
+  shake[10] = {0, 0, 120}; // Free fall towards zero.
+  zassert_true(detector.update(shake));
+}
+
+ZTEST(accel, test_motion_detector_follows_slow_drift) {
+  motion_detector detector;
+  accel_sample sample{0, 0, 256};
+  zassert_false(detector.update(std::span{&sample, 1}));
+  bool moved = false;
+  for(int i = 0; i != 2000; ++i) { // The magnitude creeps up by 0.4 g over 2000 samples.
+    sample.z = static_cast<std::int16_t>(256 + i / 20);
+    moved = moved || detector.update(std::span{&sample, 1});
+  }
+  zassert_false(moved);
+}

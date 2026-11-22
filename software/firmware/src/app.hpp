@@ -32,6 +32,10 @@ void ble_charger_changed(gtfog::charger_state state);
 [[nodiscard]] auto ble_accel_samples_per_packet() -> std::size_t; // 0 when nobody is connected.
 void ble_accel_send(std::span<std::uint8_t const> packet);
 
+void ble_settings_changed(gtfog::device_settings const &settings); // Stores them in flash and notifies the phone; does not block.
+
 void accelerometer_stream(bool on);
+void accelerometer_motion_mode(bool on); // Powers the sensor for motion detection while on.
+void accelerometer_power_off();          // Cuts the sensor's power before System OFF; any thread, never takes the controller mutex.
 
 #endif

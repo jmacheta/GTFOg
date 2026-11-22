@@ -85,7 +85,7 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		/* MCUboot runs in upgrade-only mode, so there is no scratch partition. */
+		/* MCUboot swaps using move (with revert), so there is no scratch partition. */
 		boot_partition: partition@0 {
 			label = "mcuboot";
 			reg = <0x0 0x10000>;

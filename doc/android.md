@@ -1,23 +1,33 @@
 # Android app
 
 Kotlin / Jetpack Compose app in `software/android` that controls the GTFOg over Bluetooth LE and shows and records its accelerometer
-stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 35. Platform `BluetoothGatt` for the app's own protocol, Compose `Canvas` for charts, and the
+stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 36, version 0.2.0 (code 2). Platform `BluetoothGatt` for the app's own protocol, Compose `Canvas` for charts, and the
 Nordic nRF Connect Device Manager library (`no.nordicsemi.android:mcumgr-ble` 2.7.4) for firmware update only.
 
 ## Screens
 
+Source files: `ScanScreen.kt`, `DeviceScreen.kt` (top bar, tabs, offline message), `ControlTab.kt`, `SettingsTab.kt`, `DebugTab.kt`,
+`Chart.kt`, `Theme.kt` (theme, touch sizes, chips).
+
 | Screen | Contents |
 | --- | --- |
-| Scan | LE scan filtered by the service UUID; name, address, RSSI; tap to connect. Asks for permissions and offers to enable Bluetooth |
-| Control (tab) | Battery icon drawn on a Canvas, filled to the level with the % beside it (bolt while charging; red with "!" and "Charger fault" on fault; grey outline when unknown), fan readout with slider and -5/+5, strobe switch, Mode (Manual; Motion disabled, coming soon) |
-| Settings (tab) | Stealth mode, Transport lock, Auto shutdown (Off, 5, 10, 15, 30, 60 min), Firmware card (installed version, update), model and manufacturer. Shows "Update the firmware to change settings" if the device lacks the settings characteristic |
+| Scan | LE scan filtered by the service UUID; each device as "GTFOg · B3:0B" (last two address bytes), address, RSSI; tap to connect. First-run text (permission, then the system pairing dialog on the first connect). The scan stops after 30 s ("Scan again"); a failed scan shows its error. The last connected device is remembered (SharedPreferences) and connected to automatically when seen, once per app start. A permanently refused permission offers "Open app settings"; Bluetooth off offers "Enable Bluetooth" |
+| Control (tab) | Battery icon drawn on a Canvas (red with "!" on fault, bolt while charging, grey when unknown; spoken as "Battery 82 %, charging"), fan readout with slider and -step/+step buttons (the device's fan step, "-5 %" / "+5 %"), strobe switch, Mode: Manual / Motion. In Motion: "Slow down after" (15 s, 30 s, 1 min, 2 min, 4 min) and "Idle speed" (Stop, 10, 20, 30, 50 %) |
+| Settings (tab) | Stealth mode, Transport lock (unlock on the goggles: press + three times quickly), Auto shutdown (Off, 5, 10, 15, 30, 60 min), Fan step per click (1, 2, 5, 10, 20 %), Firmware card (installed version, update), model, manufacturer and the pairing note (new phones can pair only within 3 minutes after switch-on). Shows "Update the firmware to change settings" if the device lacks the settings characteristic; with old firmware (2-byte settings) the fan step and the motion mode are disabled with a note |
 | Debug (tab) | Accelerometer, recording and the list of recordings below |
 | Accelerometer (Debug) | Live switch, scrolling x/y/z chart in g, window 5/10/30 s, Y range auto/±2/±4/±8/±16 g, legend, \|a\|, measured samples/s, lost frames |
-| Recording (Debug) | Record/Stop, file name, duration, sample count; list of recordings with Share and Delete |
+| Recording (Debug) | Record/Stop, file name, duration, sample count; list of recordings with Share and Delete (Delete asks to confirm) |
 
-After connecting, the top bar keeps the device name, connection state and Disconnect; a bottom navigation bar switches the tabs. The app is dark-only.
+After connecting, the top bar keeps the device name, connection state and Disconnect; a bottom navigation bar switches the tabs.
+Control and Settings show a message instead of empty controls while the link is down: "Connecting...", "Out of range — reconnecting..." or,
+when Bluetooth is off, "Bluetooth is off" with a Reconnect button. Debug (recordings) and a running firmware update stay visible.
 
-The slider writes on release, the buttons on press. Fan, strobe, charger and battery follow notifications. While a write to fan, strobe or settings is queued or in flight, notifications and reads of that characteristic are ignored, so quick taps on -5/+5 do not use stale values. The chart redraws at about
+The theme follows the system light/dark setting. Fan, strobe, mode and connect controls are at least 56 dp tall, all other touch
+targets at least 48 dp.
+
+The slider writes on release, the buttons on press. Fan, strobe, charger, battery and settings follow notifications. While a write
+to fan, strobe or settings is queued or in flight, notifications and reads of that characteristic are ignored. Settings changes and
+the fan buttons are computed from the latest client state, so quick taps do not use stale values. The chart redraws at about
 30 fps from a 4096-sample ring buffer.
 
 ## Permissions
@@ -33,7 +43,11 @@ The slider writes on release, the buttons on press. Fan, strobe, charger and bat
 The device advertises the name `GTFOg` and service `a7f00001-5c1e-4b8e-9d2a-6f0e1c3b4d50`. Every characteristic needs an encrypted
 link: the first access makes Android show the Just Works pairing dialog, and the bond is stored on the device. The app retries a
 failed operation (ATT errors 5 and 15) every 1.5 s, up to 6 times, while pairing completes. It requests ATT MTU 247 right after
-connecting.
+connecting. Connect, MTU and discovery must finish within 15 s (then the app closes the link and retries or reports "Could not
+connect, try again"); a queued GATT operation with no callback within 5 s is dropped (not while a bond is being created). The client
+registers for Bluetooth adapter changes: off closes the link ("Bluetooth is off"), on reconnects if the user still wants the
+connection. Disconnect statuses are shown as text: 8 "Out of range", 19 "The goggles closed the connection", 22 "Connection
+closed", 133 "Could not connect, try again".
 
 | UUID | Name | Format | Access |
 | --- | --- | --- | --- |
@@ -41,11 +55,18 @@ connecting.
 | `a7f00003-...` | Strobe | u8 0/1 | read, write, notify |
 | `a7f00004-...` | Accelerometer | frame, below | notify; the stream runs only while notifications are on |
 | `a7f00005-...` | Charger state | u8: 0 not charging (also charge done), 1 charging, 3 fault; 2 (completed) only from old firmware | read, notify |
-| `a7f00006-...` | Settings | 2 bytes: flags (bit 0 stealth, bit 1 transport lock), auto shutdown in minutes (0 = never); written whole on every change | read, write |
+| `a7f00006-...` | Settings | 6 bytes, below; written whole on every change | read, write, notify |
+| `a7f00007-...` | Actual fan speed | uint8; the big number on the Control tab, with "Target N %" below it when it differs | read, notify |
 | `0x2A19` (`0x180F`) | Battery level | u8 % | read, notify |
 | `0x2A24`, `0x2A29` (`0x180A`) | Model, manufacturer | string | read |
 
 All UUIDs end in `-5c1e-4b8e-9d2a-6f0e1c3b4d50`.
+
+Settings (v2): byte 0 flags (bit 0 stealth, bit 1 transport lock), 1 auto shutdown in minutes (0 = never), 2 fan step per
+click in % (1..25, default 5), 3 fan mode (0 manual, 1 motion), 4 motion delay in s (5..255, default 60), 5 motion idle fan in %
+(0..100, default 20). Old firmware has 2 bytes: bytes 2..5 are then defaults, the extra settings are shown as unsupported, and
+writes keep the 2-byte length (6 for new firmware). The device changes settings too (the transport lock is cleared by pressing +
+three times quickly) and notifies them; the app subscribes on connect.
 
 Accelerometer frame (little endian): `u16 seq`, `u8 rate_hz` (100), `u8 n` (at most 40), then `n` times `int16 x, y, z` in milli-g
 (range ±16 g). `seq` increases by 1 per frame and wraps; a gap counts as lost frames. Duplicate or reordered frames are not counted.
@@ -58,8 +79,10 @@ Settings tab, Firmware card. The installed version is slot 0 of mcumgr image lis
 `.bin` is used). The MCUboot header magic `0x96f3b83d` is checked and the file version (header offset 20) is shown; anything else
 is an error. "Install" runs `FirmwareUpgradeManager` in `TEST_AND_CONFIRM` mode over `McuMgrBleTransport` (a second GATT link to
 the connected device; swap time 20 s, upload window 4, alignment 4): validate, upload (percent, Cancel), test, reset, confirm.
-The device resets and `GtfogClient` reconnects; the card then shows the new version. The screen stays on while it runs. The
-library 2.7.4 is the newest that builds with compileSdk 35 (2.8.0 and later require compileSdk 37). Helpers `parseImageVersion`
+The device resets and `GtfogClient` reconnects; the file version is not trusted: after completion the app waits until the client
+is connected again (at most 60 s), then reads slot 0 from the device and shows that. A failed update shows "Update interrupted.
+The goggles keep the old firmware; reconnect and try again." with the technical detail below it. The screen stays on while it runs. The
+library 2.7.4 is the newest that builds without raising compileSdk to 37 (2.8.0 and later require it). Helpers `parseImageVersion`
 and `loadImage` are in `Dfu.kt`, tested in `DfuTest.kt`. Not tested on a phone or device.
 
 ## Recording
@@ -70,7 +93,7 @@ service keeps the process, the GATT link and the file writer alive with the scre
 link drops, the client reconnects with `autoConnect` and writes a `# reconnect at <ms>` line. Disconnect stops the recording.
 
 ```
-# start=2026-11-21T10:00:00+01:00, app=GTFOg 0.1.0, device=GTFOg by <manufacturer> <address>, rate=100 Hz
+# start=2026-11-21T10:00:00+01:00, app=GTFOg 0.2.0, device=GTFOg by <manufacturer> <address>, rate=100 Hz
 phone_time_ms,seq,index,x_mg,y_mg,z_mg
 1763715600123,42,0,12,-998,40
 1763715600123,42,1,10,-1001,38
@@ -88,19 +111,25 @@ Frames arrive in jittery bursts, so order samples by `seq` and `index`; at 100 H
 
 ## Build and install
 
-JDK 17 or newer that AGP 8.9 accepts (Android Studio's bundled JDK 21 works; JDK 25 does not). Android SDK 35 with build-tools 35.0.0;
+JDK 17 or newer that AGP 8.9 accepts (Android Studio's bundled JDK 21 works; JDK 25 does not). Android SDK platform 36;
 put its path in `software/android/local.properties` as `sdk.dir=...` (git-ignored).
 
 ```
 cd software/android
-./gradlew assembleDebug testDebugUnitTest lintDebug
+./gradlew assembleDebug assembleRelease testDebugUnitTest lintDebug
 ./gradlew installDebug          # phone with USB debugging
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb pull /sdcard/Android/data/io.github.jmacheta.gtfog/files/recordings/ .
 ```
 
-The testable core is `Protocol.kt` (frame decode, sequence gaps, ring buffer, CSV lines, charger mapping), covered by JVM unit tests
-in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the same Gradle command and uploads the APK as
+Release builds use R8 (`isMinifyEnabled`, `isShrinkResources`) with `app/proguard-rules.pro`, which keeps `io.runtime.mcumgr.**` and the
+Jackson annotations (mcumgr maps CBOR onto its model classes by reflection). The release is signed only if the Gradle properties
+`gtfog.storeFile`, `gtfog.storePassword`, `gtfog.keyAlias` and `gtfog.keyPassword` are set (for example in `~/.gradle/gradle.properties`);
+otherwise `app-release-unsigned.apk` is produced. No keys are in the repository. The launcher icon is adaptive (`mipmap-anydpi-v26`,
+vector fan in a ring, with a monochrome layer).
+
+The testable core is `Protocol.kt` (frame decode, sequence gaps, ring buffer, CSV lines, charger mapping, settings v2, labels and error texts), covered by JVM unit tests
+in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the same Gradle command (including `assembleRelease`) and uploads the debug APK as
 `gtfog-android-debug`.
 
 ## Open items

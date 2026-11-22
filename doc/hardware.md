@@ -29,7 +29,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | Strobe | P0.20 | PWM1 out 0 | Normal polarity, 1 ms period |
 | I2C SCL | P0.00 | TWIM0 | Standard rate, pull-up |
 | I2C SDA | P0.01 | TWIM0 | Standard rate, pull-up |
-| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345 |
+| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345; the firmware keeps it low unless a phone streams or motion mode is on |
 | Accelerometer INT1 | P0.05 | GPIO | Unused by the firmware |
 | Accelerometer INT2 | P0.04 | GPIO | Unused by the firmware |
 | Charger STAT1 | P0.03 | GPIO in | Pull-up |
@@ -52,6 +52,22 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
   of the fan driver. With a battery connected the charger pulls the supply down a little and the driver accepts the
   signal. Bench-test the fan with a battery connected.
 
+## Rev 1.0 errata (from the schematic PDF and board measurements, 2026-11-22)
+
+- **Charger TS/MR floating:** U301 pin 6 (TS/MR) is unconnected. The BQ25185 reads that as a temperature fault and
+  does not charge (STAT1 low, STAT2 high). Fix: 10 kΩ from TS/MR to GND, or a 10 kΩ NTC on the cell; never tie it
+  straight to GND (manual reset / factory mode). Reworked on boards 1 and 2; both then report charging.
+- **Board 1 32 MHz crystal off by about +215 ppm** (X201, measured over SWD with a 1 MHz TIMER against the host clock,
+  two intervals to cancel the probe overhead). BLE allows ±50 ppm, so the board transmits but nobody decodes it. The
+  nRF52833 has no internal load capacitors to trim and the radio has 1 MHz steps only, so firmware cannot correct it:
+  replace X201. Board 2 works.
+- **Battery divider always on:** R301/R302 (2 × 47 kΩ) draw about 45 µA from the cell, also in System OFF. A switched
+  divider or larger resistors would cut it.
+- **Strobe:** D402/D403 from VSYS through 68 Ω each (R404/R406), switched low-side by Q401 (2N7002): about 26-29 mA per
+  LED, the LEDs' DC limit. Brighter needs other LEDs or a pulsed design, not firmware.
+- **Fan:** MCP1643 EN driven straight from P0.11 with a 47 kΩ pull-down (R401); output 176 mA set by R403 (0.68 Ω).
+- **ADXL345** is powered from P1.09 directly (VDD_ADXL), so the firmware powers it down when unused.
+
 ## Flash map
 
 | Partition | Offset | Size |
@@ -62,7 +78,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | `storage` | 0x7A000 | 0x06000 (24 KB) |
 
 There is no scratch partition (swap using move). Use: the application (built with LTO) takes about 156 KB of about 204 KB
-available, MCUboot about 54 KB of 64 KB. `storage` holds the Bluetooth bonds. Boards with an MCUboot built for an older map
+available, MCUboot about 54 KB of 64 KB. `storage` holds the Bluetooth bonds and the device settings. Boards with an MCUboot built for an older map
 need the new MCUboot over SWD once.
 
 ## Calibration knobs
@@ -102,6 +118,6 @@ The README asks to hold with PCB manufacturing until a tagged release exists.
 
 ## Open questions
 
-- Sheet contents above are inferred from file names, not read from the Altium files.
+- Sheet contents above were first inferred from file names; the errata section is from the schematic PDF export.
 - Regulator part number, battery connector and fan model are not stated in the repo text; see the BoM.
 - Which signals are on the USB harness beyond D+/D- (VBUS sense?) is not visible in the devicetree.

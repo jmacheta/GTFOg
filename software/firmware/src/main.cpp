@@ -13,7 +13,10 @@ int main() {
   if(ble_err != 0) {
     LOG_ERR("Bluetooth: %d", ble_err);
   }
-  with_controller([](gtfog::controller &c) { c.power_on(); });
+  accelerometer_motion_mode(with_controller([](gtfog::controller &c) {
+    c.power_on();
+    return c.settings().mode == gtfog::fan_mode::motion;
+  }));
   // A new image runs on trial after an update. It confirms itself only when Bluetooth works, the update path for the
   // next fix; otherwise MCUboot reverts it on the next reset.
   if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {

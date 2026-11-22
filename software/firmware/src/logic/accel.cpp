@@ -1,5 +1,7 @@
 #include "accel.hpp"
 
+#include <cmath>
+
 namespace gtfog {
 
 namespace {
@@ -23,6 +25,22 @@ auto pack_accel(std::uint16_t seq, std::uint8_t rate_hz, std::span<accel_sample 
     at = put16(at, counts_to_milli_g(s.z));
   }
   return static_cast<std::size_t>(at - out.data());
+}
+
+auto motion_detector::update(std::span<accel_sample const> samples) noexcept -> bool {
+  constexpr float baseline_weight = 1.0F / 128;
+  bool moving = false;
+  for(auto const &s : samples) {
+    float x = counts_to_milli_g(s.x), y = counts_to_milli_g(s.y), z = counts_to_milli_g(s.z);
+    float magnitude = std::sqrt(x * x + y * y + z * z);
+    if(!primed) {
+      baseline_milli_g = magnitude;
+      primed = true;
+    }
+    moving = moving || std::fabs(magnitude - baseline_milli_g) > threshold_milli_g;
+    baseline_milli_g += (magnitude - baseline_milli_g) * baseline_weight;
+  }
+  return moving;
 }
 
 } // namespace gtfog

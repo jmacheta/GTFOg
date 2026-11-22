@@ -11,8 +11,9 @@ using namespace std::chrono_literals;
 enum class button_action {
   plus,          // Raise the fan speed by `steps`.
   minus,         // Lower the fan speed by `steps`.
-  toggle_strobe, // Both buttons held for `button_timing::toggle_strobe`.
+  toggle_strobe, // Both buttons released after `button_timing::toggle_strobe`, before `button_timing::power_off`.
   power_off,     // Both buttons held for `button_timing::power_off`.
+  unlock,        // Third short press of plus within `button_timing::unlock_window`, instead of `plus`.
 };
 
 struct button_event {
@@ -31,6 +32,8 @@ struct button_timing {
   std::chrono::milliseconds stuck{30s}; // Held this long, a button is ignored until released.
   std::chrono::milliseconds toggle_strobe{2s};
   std::chrono::milliseconds power_off{5s};
+  std::chrono::milliseconds unlock_window{2s};
+  unsigned unlock_taps{3};
 };
 
 // Turns button levels sampled over time into actions. Pure logic: the caller samples the pins and passes the time.
@@ -52,6 +55,7 @@ private:
   };
 
   [[nodiscard]] auto single(button &b, bool is_pressed, button_action action, std::chrono::milliseconds now) noexcept -> std::optional<button_event>;
+  [[nodiscard]] auto short_plus(std::chrono::milliseconds now) noexcept -> button_event;
   [[nodiscard]] auto steps_after(std::chrono::milliseconds held) const noexcept -> unsigned;
 
   button_timing timing;
@@ -59,8 +63,9 @@ private:
   button minus;
   bool chord{false}; // Both buttons went down together; single actions stay off until both are released.
   std::chrono::milliseconds chord_since{};
-  bool strobe_sent{false};
-  bool power_off_sent{false};
+  bool chord_done{false}; // The chord fired, or a button was let go: it cannot fire any more.
+  unsigned taps{0};       // Short presses of plus within the unlock window.
+  std::chrono::milliseconds first_tap{};
 };
 
 } // namespace gtfog

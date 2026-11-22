@@ -8,7 +8,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +26,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
-data class ScanItem(val device: BluetoothDevice, val name: String, val address: String, val rssi: Int)
+data class ScanItem(val device: BluetoothDevice, val name: String, val address: String, val rssi: Int) {
+    val label get() = deviceLabel(name, address)
+}
+
+private const val SCAN_TIMEOUT_MS = 30_000L
 
 data class Stats(val samples: Long = 0, val lost: Long = 0)
 
@@ -46,6 +53,16 @@ class Session(private val app: Application) {
     val stats = MutableStateFlow(Stats())
     val rec = MutableStateFlow(RecState())
     val recordings = MutableStateFlow<List<File>>(emptyList())
+    val scanning = MutableStateFlow(false)
+    val scanError = MutableStateFlow<String?>(null)
+    private val prefs = app.getSharedPreferences("gtfog", Context.MODE_PRIVATE)
+    private val handler = Handler(Looper.getMainLooper())
+    private val scanTimeout = Runnable { stopScan() }
+
+    // Connect by itself to the last goggles only once per app start: after a Disconnect or a failure the user chooses.
+    private var autoConnect = true
+
+    val lastAddress: String? get() = prefs.getString("last", null)
 
     private val tracker = SeqTracker()
     private val io = Executors.newSingleThreadExecutor()
@@ -64,28 +81,45 @@ class Session(private val app: Application) {
             val name = r.scanRecord?.deviceName ?: r.device.name ?: "GTFOg"
             found[r.device.address] = ScanItem(r.device, name, r.device.address, r.rssi)
             scanResults.value = found.values.sortedByDescending { it.rssi }
+            if (autoConnect && r.device.address == lastAddress && client.state.value.conn == Conn.Idle) connect(found.getValue(r.device.address))
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            handler.removeCallbacks(scanTimeout)
+            scanning.value = false
+            scanError.value = "Scan failed (error $errorCode)"
         }
     }
 
     fun startScan() {
+        if (adapter?.isEnabled != true) return
+        stopScan()
+        scanError.value = null
         found.clear()
         scanResults.value = emptyList()
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(Uuids.SERVICE)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        adapter?.bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
+        adapter.bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
+        scanning.value = true
+        handler.postDelayed(scanTimeout, SCAN_TIMEOUT_MS)
     }
 
     fun stopScan() {
+        handler.removeCallbacks(scanTimeout)
+        scanning.value = false
         if (adapter?.isEnabled == true) adapter.bluetoothLeScanner?.stopScan(scanCallback)
     }
 
     fun connect(item: ScanItem) {
+        autoConnect = false
+        prefs.edit().putString("last", item.address).apply()
         tracker.reset()
         stats.value = Stats()
-        client.connect(item.device, item.name)
+        client.connect(item.device, item.label)
     }
 
     fun disconnect() {
+        autoConnect = false
         stopRecording()
         client.disconnect()
     }

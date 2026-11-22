@@ -2,7 +2,13 @@ package io.github.jmacheta.gtfog
 
 import android.annotation.SuppressLint
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import io.runtime.mcumgr.McuMgrCallback
@@ -59,6 +65,7 @@ data class DfuState(
     val status: String = "",
     val percent: Int = 0,
     val error: String? = null,
+    val detail: String? = null,
     val done: Boolean = false,
 )
 
@@ -67,6 +74,7 @@ data class DfuState(
 class Dfu(private val ctx: Context, private val client: GtfogClient) {
     private val _state = MutableStateFlow(DfuState())
     val state: StateFlow<DfuState> = _state
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var manager: FirmwareUpgradeManager? = null
 
     /** Reads the version of slot 0 from the device. */
@@ -92,7 +100,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
         _state.update {
             it.copy(
                 file = name, image = r.getOrNull(), fileVersion = r.getOrNull()?.let(::parseImageVersion),
-                error = r.exceptionOrNull()?.message, done = false,
+                error = r.exceptionOrNull()?.message, detail = null, done = false,
             )
         }
     }
@@ -123,12 +131,20 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
             }
 
             override fun onUpgradeCompleted() {
-                finish { it.copy(status = "Done", percent = 100, done = true, installed = it.fileVersion) }
-                refresh()
+                // The file's version is not proof: wait for the goggles to be back, then ask them what runs.
+                finish { it.copy(status = "Done", percent = 100, done = true, installed = null) }
+                scope.launch {
+                    withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } }
+                    refresh()
+                }
             }
 
-            override fun onUpgradeFailed(state: State, error: McuMgrException) =
-                finish { it.copy(error = "Update failed while ${state.name.lowercase()}: ${error.message}") }
+            override fun onUpgradeFailed(state: State, error: McuMgrException) = finish {
+                it.copy(
+                    error = "Update interrupted. The goggles keep the old firmware; reconnect and try again.",
+                    detail = "Failed while ${state.name.lowercase()}: ${error.message}",
+                )
+            }
 
             override fun onUpgradeCanceled(state: State) = finish { it.copy(error = "Update canceled") }
 
@@ -138,7 +154,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
         })
         m.setMode(FirmwareUpgradeManager.Mode.TEST_AND_CONFIRM)
         manager = m
-        _state.update { it.copy(running = true, status = "Connecting", percent = 0, error = null, done = false) }
+        _state.update { it.copy(running = true, status = "Connecting", percent = 0, error = null, detail = null, done = false) }
         runCatching {
             m.start(
                 image,
@@ -148,7 +164,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient) {
                     .setMemoryAlignment(4)
                     .build(),
             )
-        }.onFailure { e -> finish { it.copy(error = e.message ?: "Cannot start the update") } }
+        }.onFailure { e -> finish { it.copy(error = e.message ?: "Cannot start the update", detail = null) } }
     }
 
     fun cancel() {

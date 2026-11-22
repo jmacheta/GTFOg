@@ -9,31 +9,22 @@ auto button_gestures::update(bool plus_pressed, bool minus_pressed, std::chrono:
   if(plus_pressed && minus_pressed && !chord) {
     chord = true;
     chord_since = now;
-    strobe_sent = false;
-    power_off_sent = false;
+    chord_done = false;
   }
 
   if(chord) {
     plus.pressed = plus_pressed;
     minus.pressed = minus_pressed;
-    if(!plus_pressed && !minus_pressed) {
-      chord = false;
-      return std::nullopt;
-    }
-    if(!plus_pressed || !minus_pressed) {
-      strobe_sent = power_off_sent = true; // A button was let go: the chord cannot fire any more.
-      return std::nullopt;
-    }
     auto held = now - chord_since;
-    if(!power_off_sent && held >= timing.power_off) {
-      power_off_sent = true;
-      return button_event{button_action::power_off};
-    }
-    if(!strobe_sent && held >= timing.toggle_strobe) {
-      strobe_sent = true;
+    bool released = !plus_pressed || !minus_pressed;
+    bool fire_strobe = released && !chord_done && held >= timing.toggle_strobe && held < timing.power_off;
+    bool fire_power_off = !released && !chord_done && held >= timing.power_off;
+    chord_done = chord_done || released || fire_power_off;
+    chord = plus_pressed || minus_pressed;
+    if(fire_strobe) {
       return button_event{button_action::toggle_strobe};
     }
-    return std::nullopt;
+    return fire_power_off ? std::optional{button_event{button_action::power_off}} : std::nullopt;
   }
 
   if(auto event = single(plus, plus_pressed, button_action::plus, now)) {
@@ -54,7 +45,10 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
   if(!is_pressed) {
     bool was_short = b.pressed && held >= timing.short_press && held < timing.long_press;
     b.pressed = false;
-    return was_short ? std::optional{button_event{action}} : std::nullopt;
+    if(!was_short) {
+      return std::nullopt;
+    }
+    return action == button_action::plus ? short_plus(now) : button_event{action};
   }
 
   if(!b.pressed || held >= timing.stuck || now < b.next_repeat) {
@@ -62,6 +56,18 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
   }
   b.next_repeat = now + timing.repeat_interval;
   return button_event{action, steps_after(held)};
+}
+
+auto button_gestures::short_plus(std::chrono::milliseconds now) noexcept -> button_event {
+  if(taps == 0 || now - first_tap > timing.unlock_window) {
+    taps = 0;
+    first_tap = now;
+  }
+  if(++taps < timing.unlock_taps) {
+    return {button_action::plus};
+  }
+  taps = 0;
+  return {button_action::unlock};
 }
 
 auto button_gestures::steps_after(std::chrono::milliseconds held) const noexcept -> unsigned {

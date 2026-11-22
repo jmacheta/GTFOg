@@ -57,6 +57,10 @@ constexpr auto pattern_of(signal s) noexcept -> pattern {
     return {red, 3, 200, 200};
   case signal::locked:
     return {red, 1, 50, 0};
+  case signal::unlocked:
+    return {green, 2, 100, 100};
+  case signal::battery_warning:
+    return {red, 2, 100, 100};
   case signal::power_off:
     return {cyan, 1, 300, 0};
   }
@@ -65,7 +69,7 @@ constexpr auto pattern_of(signal s) noexcept -> pattern {
 
 void set_pwm(pwm_dt_spec const &spec, unsigned permille) {
   // An LED or strobe glitch is harmless, so a failed write is only logged.
-  if(int err = pwm_set_pulse_dt(&spec, spec.period * permille / 1000); err != 0) {
+  if(int err = pwm_set_pulse_dt(&spec, pwm_pulse_ns(spec.period, permille)); err != 0) {
     LOG_WRN("PWM %u: %d", spec.channel, err);
   }
 }
@@ -78,6 +82,7 @@ void set_color(color c) {
 
 pattern current_pattern;
 unsigned pattern_phase;
+std::int64_t phase_end_ms; // Uptime at which the phase shown last ends.
 
 void indicator_step(k_work *work);
 K_WORK_DELAYABLE_DEFINE(indicator_work, indicator_step);
@@ -90,7 +95,9 @@ void indicator_step(k_work *) {
   bool lit = pattern_phase % 2 == 0;
   set_color(lit ? current_pattern.c : black);
   ++pattern_phase;
-  k_work_schedule(&indicator_work, K_MSEC(lit ? current_pattern.on_ms : current_pattern.off_ms));
+  auto duration_ms = lit ? current_pattern.on_ms : current_pattern.off_ms;
+  phase_end_ms = k_uptime_get() + duration_ms;
+  k_work_schedule(&indicator_work, K_MSEC(duration_ms));
 }
 
 bool strobe_lit;
@@ -107,7 +114,7 @@ void strobe_step(k_work *) {
 class board_outputs final : public outputs {
 public:
   void set_fan(unsigned percent) override {
-    if(int err = pwm_set_pulse_dt(&fan_pwm, fan_pwm.period * fan_duty_permille(percent, fan_min_duty_permille) / 1000); err != 0) {
+    if(int err = pwm_set_pulse_dt(&fan_pwm, pwm_pulse_ns(fan_pwm.period, fan_duty_permille(percent, fan_min_duty_permille))); err != 0) {
       LOG_ERR("fan PWM: %d", err);
     }
     ble_state_changed();
@@ -131,14 +138,26 @@ public:
     k_work_schedule(&indicator_work, K_NO_WAIT);
   }
 
+  void settings_changed(device_settings const &s) override {
+    ble_settings_changed(s);
+    accelerometer_motion_mode(s.mode == fan_mode::motion);
+  }
+
   void power_off() override {
     LOG_INF("power off");
-    // Let the last pattern (power off or low battery) finish first.
-    for(int waited_ms = 0; waited_ms < 2000 && pattern_phase < 2 * current_pattern.blinks; waited_ms += 10) {
-      k_msleep(10);
-    }
+    // The system workqueue may be blocked on the controller mutex, which the caller holds: finish the pattern here and
+    // wait for no work item.
     k_work_cancel_delayable(&indicator_work);
+    if(auto left_ms = phase_end_ms - k_uptime_get(); left_ms > 0) {
+      k_msleep(left_ms);
+    }
+    for(; pattern_phase < 2 * current_pattern.blinks; ++pattern_phase) {
+      bool lit = pattern_phase % 2 == 0;
+      set_color(lit ? current_pattern.c : black);
+      k_msleep(lit ? current_pattern.on_ms : current_pattern.off_ms);
+    }
     set_color(black);
+    accelerometer_power_off();
     buttons_arm_wake();
     sys_poweroff();
   }

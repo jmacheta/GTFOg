@@ -69,7 +69,7 @@ class RecordService : Service() {
             this, 1, Intent(this, RecordService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Recording $state ${formatDuration(session.rec.durationMs)}")
             .setContentText("${r.samples} samples, ${lost} lost frames")
             .setContentIntent(open)

@@ -65,6 +65,12 @@ by `smpmgr image state-read`.
   mcumgr over Bluetooth into slot 1). No sensor driver: the ADXL345 uses raw I2C.
 - Board options are in `gtfog_defconfig` and `Kconfig.gtfog`.
 
+## Release signing key
+
+MCUboot currently uses the public development key (`root-rsa-2048`) for CI and development builds. Release builds must pass
+a private key with `-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=/path/to/key.pem` (the key stays outside the repository). Boards
+already flashed with the development-key MCUboot need an SWD flash of the new MCUboot once.
+
 ## Formatting
 
 - C++: `clang-format -i` (`.clang-format` at the repo root: LLVM base, 150 columns).

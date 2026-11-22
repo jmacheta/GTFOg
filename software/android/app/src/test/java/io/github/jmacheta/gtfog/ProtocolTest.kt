@@ -106,16 +106,48 @@ class ProtocolTest {
 
     @Test
     fun settingsRoundTrip() {
-        assertArrayEquals(byteArrayOf(3, 30), DeviceSettings(true, true, 30).encode())
-        assertArrayEquals(byteArrayOf(2, 0), DeviceSettings(false, true, 0).encode())
-        assertEquals(DeviceSettings(true, false, 5), parseSettings(byteArrayOf(1, 5)))
-        assertEquals(DeviceSettings(false, true, 60), parseSettings(byteArrayOf(2, 60)))
+        assertArrayEquals(byteArrayOf(3, 30, 5, 0, 60, 20), DeviceSettings(true, true, 30).encode())
+        assertArrayEquals(byteArrayOf(2, 0, 10, 1, 120, 0), DeviceSettings(false, true, 0, 10, true, 120, 0).encode())
+        assertEquals(
+            DeviceSettings(true, false, 5, 2, true, 15, 50),
+            parseSettings(byteArrayOf(1, 5, 2, 1, 15, 50)),
+        )
+        assertEquals(DeviceSettings(false, true, 60, 25, false, 255, 100), parseSettings(byteArrayOf(2, 60, 25, 0, -1, 100)))
+    }
+
+    @Test
+    fun oldFirmwareSettings() {
+        val s = parseSettings(byteArrayOf(1, 5))!!
+        assertEquals(DeviceSettings(true, false, 5, extended = false), s)
+        assertEquals(5, s.fanStep)
+        assertEquals(60, s.motionDelayS)
+        // written back with the length the device uses
+        assertArrayEquals(byteArrayOf(2, 60), DeviceSettings(false, true, 60, extended = false).encode())
+        assertArrayEquals(byteArrayOf(1, 5), s.encode())
+    }
+
+    @Test
+    fun settingsEncodeClamps() {
+        assertArrayEquals(byteArrayOf(0, 0, 1, 0, 5, 0), DeviceSettings(false, false, 0, 0, false, 0, -3).encode())
+        assertArrayEquals(byteArrayOf(0, -1, 25, 1, -1, 100), DeviceSettings(false, false, 999, 99, true, 999, 200).encode())
     }
 
     @Test
     fun settingsRejectWrongSize() {
-        assertNull(parseSettings(byteArrayOf()))
-        assertNull(parseSettings(byteArrayOf(1)))
-        assertNull(parseSettings(byteArrayOf(1, 2, 3)))
+        for (n in listOf(0, 1, 3, 4, 5, 7)) assertNull(parseSettings(ByteArray(n)))
+    }
+
+    @Test
+    fun labelsAndTexts() {
+        assertEquals("GTFOg \u00b7 B3:0B", deviceLabel("GTFOg", "AA:BB:CC:DD:B3:0B"))
+        assertEquals("Battery 82 %, charging", batteryDescription(82, 1))
+        assertEquals("Battery 82 %", batteryDescription(82, 0))
+        assertEquals("Battery level unknown", batteryDescription(null, null))
+        assertEquals("Battery, charger fault", batteryDescription(50, 3))
+        assertEquals("Out of range", gattErrorText(8))
+        assertEquals("The goggles closed the connection", gattErrorText(19))
+        assertEquals("Connection closed", gattErrorText(22))
+        assertEquals("Could not connect, try again", gattErrorText(133))
+        assertEquals("Connection failed (status 7)", gattErrorText(7))
     }
 }
