@@ -44,7 +44,7 @@ ZTEST(buttons, test_long_press_repeats_and_accelerates) {
   auto events = run(g, false, true, 0ms, 7000ms);
   zassert_false(events.empty());
   zassert_true((events.front() == button_event{button_action::minus, 1}));
-  zassert_true((events.back() == button_event{button_action::minus, 3})); // 6..9 s of holding.
+  zassert_true((events.back() == button_event{button_action::minus, 3, true})); // 6..9 s of holding.
   // One repeat per 200 ms from 500 ms on.
   zassert_within(events.size(), (7000 - 500) / 200, 2);
   zassert_false(g.update(false, false, 7020ms).has_value(), "a long press must not also fire on release");
@@ -170,4 +170,31 @@ ZTEST(buttons, test_second_button_during_repeat_starts_a_chord_and_stops_the_rep
   zassert_true(run(g, true, true, 1020ms, 3200ms).empty());
   auto released = g.update(false, false, 3220ms);
   zassert_true((released == button_event{button_action::toggle_strobe}));
+}
+
+ZTEST(buttons, test_both_held_since_boot_still_power_off) {
+  button_gestures g;
+  g.wait_for_release();
+  auto events = run(g, true, true, 0ms, 6s);
+  zassert_equal(events.size(), 1);
+  zassert_true((events[0] == button_event{button_action::power_off}));
+}
+
+ZTEST(buttons, test_second_button_after_a_boot_press_starts_the_chord) {
+  button_gestures g;
+  g.wait_for_release();
+  zassert_true(run(g, true, false, 0ms, 1s).empty());
+  auto events = run(g, true, true, 1020ms, 7s);
+  zassert_equal(events.size(), 1);
+  zassert_true((events[0] == button_event{button_action::power_off}));
+}
+
+ZTEST(buttons, test_only_repeats_after_the_first_are_marked) {
+  button_gestures g;
+  auto events = run(g, true, false, 0ms, 2s);
+  zassert_true(events.size() > 3);
+  zassert_false(events.front().repeat);
+  for(std::size_t i = 1; i != events.size(); ++i) {
+    zassert_true(events[i].repeat);
+  }
 }

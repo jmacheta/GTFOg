@@ -36,8 +36,7 @@ bt_uuid_128 const effective_fan_uuid = GTFOG_UUID(7);
 constexpr char settings_key[] = "gtfog/cfg";
 
 std::atomic<std::uint8_t> charger{0};
-// ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1). Written by the Bluetooth threads, read by the others; the
-// accelerometer thread reads only the cached ATT MTU, never the connection.
+// ponytail: one connection at a time (CONFIG_BT_MAX_CONN=1); the accelerometer thread reads only the cached ATT MTU.
 std::atomic<bt_conn *> current_conn{nullptr};
 std::atomic<std::uint16_t> att_mtu{0};
 
@@ -86,11 +85,17 @@ auto read_settings(bt_conn *conn, bt_gatt_attr const *attr, void *buf, std::uint
 }
 
 auto write_settings(bt_conn *, bt_gatt_attr const *, void const *buf, std::uint16_t len, std::uint16_t offset, std::uint8_t) -> ssize_t {
-  auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len});
-  if(offset != 0 || !settings) {
+  // Shorter forms change only the fields they carry, so they are decoded on top of the current settings.
+  bool accepted = offset == 0 && with_controller([&](gtfog::controller &control) {
+                    auto settings = gtfog::decode_settings({static_cast<std::uint8_t const *>(buf), len}, control.settings());
+                    if(settings) {
+                      control.update_settings(*settings); // Calls ble_settings_changed().
+                    }
+                    return settings.has_value();
+                  });
+  if(!accepted) {
     return BT_GATT_ERR(gtfog::is_settings_size(len) ? BT_ATT_ERR_VALUE_NOT_ALLOWED : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
-  with_controller([&](gtfog::controller &control) { control.update_settings(*settings); }); // Calls ble_settings_changed().
   return len;
 }
 
@@ -102,7 +107,9 @@ auto load_settings(char const *key, std::size_t len, settings_read_cb read, void
   }
   if(auto settings = gtfog::decode_settings({bytes.data(), len})) {
     with_controller([&](gtfog::controller &control) { control.configure(*settings); });
+    k_mutex_lock(&save_lock, K_FOREVER);
     last_saved = gtfog::encode(*settings);
+    k_mutex_unlock(&save_lock);
   }
   return 0;
 }
@@ -213,6 +220,7 @@ void notify_settings(k_work *) {
   auto bytes = pending_settings;
   k_spin_unlock(&pending_settings_lock, key);
   if(bytes) {
+    // Fails only when nobody listens.
     std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[settings_value], bytes->data(), static_cast<std::uint16_t>(bytes->size()));
   }
 }
@@ -317,14 +325,14 @@ void ble_settings_flush() {
 
 void ble_battery_changed(std::uint8_t percent) {
   if(bt_is_ready()) {
-    std::ignore = bt_bas_set_battery_level(percent);
+    std::ignore = bt_bas_set_battery_level(percent); // Only fails for a value above 100; the next sample retries.
   }
 }
 
 void ble_charger_changed(gtfog::charger_state state) {
   auto value = static_cast<std::uint8_t>(state);
   if(charger.exchange(value) != value && bt_is_ready()) {
-    std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[charger_value], &value, sizeof(value));
+    std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[charger_value], &value, sizeof(value)); // Fails only when nobody listens.
   }
 }
 

@@ -7,7 +7,7 @@ What the firmware in `software/firmware` has to satisfy. Behavior is in [firmwar
 - **Small and predictable.** A battery-powered nRF52833 (512 KiB flash, 128 KiB RAM, of which an application slot is
   212 KB). No dynamic allocation in application code; threads and stacks are static (`K_THREAD_DEFINE`). The application
   uses about 160 KB of about 204 KB, so features still have to pay for themselves.
-- **Modern C++.** C++23 (`CONFIG_STD_CPP23`), `std::chrono` for every time value, `constexpr` where it helps, no
+- **Modern C++.** C++23 (`CONFIG_STD_CPP23`), `std::chrono` for time values in the logic's interfaces (plain integers only for wire fields and Zephyr tick macros, with the unit in the name), `constexpr` where it helps, no
   exceptions, no RTTI.
 - **Safe in the field.** The fan and strobe never depend on a radio or a phone: manual control works without BLE.
   Power-off by both buttons is reachable from every state.

@@ -109,3 +109,29 @@ ZTEST(accel, test_fifo_watchdog_recovers_after_a_second_and_gives_up_on_the_thir
   zassert_equal(dog.poll(false, 1000), verdict::lost);
   zassert_equal(dog.poll(false, 1000), verdict::recover, "lost is reported once");
 }
+
+ZTEST(accel, test_activity_thresholds_are_80_and_300_mg) {
+  // Swings of 40 and 42 counts alternate magnitudes 156 and 164 mg apart: deviations 78 and 82 mg; 153 and 154 counts: 298.5 and 300.5 mg.
+  zassert_equal(classify_second(40), activity_level::still);
+  zassert_equal(classify_second(42), activity_level::walking);
+  zassert_equal(classify_second(153), activity_level::walking);
+  zassert_equal(classify_second(154), activity_level::running);
+}
+
+ZTEST(accel, test_activity_window_may_span_chunks_of_any_size) {
+  activity_classifier classifier;
+  std::array<accel_sample, 30> chunk{};
+  int reports = 0;
+  std::optional<activity_level> last;
+  for(int i = 0; i != 7; ++i) { // 210 samples: windows complete inside chunks 4 and 7.
+    for(std::size_t j = 0; j != chunk.size(); ++j) {
+      chunk[j] = {0, 0, static_cast<std::int16_t>(256 + ((i * chunk.size() + j) % 2 == 0 ? 0 : 200))};
+    }
+    if(auto level = classifier.update(chunk)) {
+      last = level;
+      ++reports;
+    }
+  }
+  zassert_equal(reports, 2);
+  zassert_equal(*last, activity_level::running);
+}

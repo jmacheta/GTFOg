@@ -29,7 +29,7 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | Strobe | P0.20 | PWM1 out 0 | Normal polarity, 1 ms period |
 | I2C SCL | P0.00 | TWIM0 | Standard rate, pull-up |
 | I2C SDA | P0.01 | TWIM0 | Standard rate, pull-up |
-| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345; the firmware keeps it low unless a phone streams or motion mode is on (and the transport lock is off); the accelerometer thread drives it |
+| Accelerometer power | P1.09 | GPIO out | High enables the ADXL345; the firmware keeps it low unless a phone streams or motion mode is on (motion mode needs the transport lock off); the accelerometer thread drives it |
 | Accelerometer INT1 | P0.05 | GPIO | Unused by the firmware |
 | Accelerometer INT2 | P0.04 | GPIO | Unused by the firmware |
 | Charger STAT1 | P0.03 | GPIO in | Pull-up |
@@ -39,11 +39,13 @@ From `gtfog.dts` and `gtfog-pinctrl.dtsi`.
 | Battery voltage | P0.28 (AIN4) | SAADC ch 4 | Gain 1/6, internal reference, 12 bit; behind a divider of 2 (47k/47k, unverified) |
 | Supply voltage | VDDH / 5 | SAADC ch 0 | Gain 1/2, internal reference, 12 bit; not sampled by the firmware |
 | USB | D+ / D- | USBD | MCUboot recovery only |
+| Reset button | P0.18 | nRESET | Pin reset enabled by `&uicr { gpio-as-nreset; }` in `gtfog.dts`, see [Power](#power) |
 
 ## Power
 
 - The firmware sets the GPIO supply level (UICR `REGOUT0`) to 3.3 V on first boot when the chip runs from the high-voltage
   supply (VDDH), then resets once.
+- The reset button on P0.18 works only after UICR `PSELRESET` is programmed. The startup code (nrfx, from `gpio-as-nreset` in `gtfog.dts`, in the application and in MCUboot) writes it on the first boot of a new image, also after a Bluetooth update, and a chip reset follows. A chip that was erased or never ran this firmware has the pin as a plain GPIO until then.
 - The low-frequency clock is the RC oscillator in the application (no 32 kHz crystal on the board); MCUboot uses the
   synthesized clock.
 - Power-off uses System OFF; the buttons wake the chip.

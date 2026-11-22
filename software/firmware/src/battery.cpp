@@ -6,6 +6,7 @@
 #include <zephyr/drivers/watchdog.h>
 #include <zephyr/logging/log.h>
 
+#include <chrono>
 #include <tuple>
 
 LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
@@ -87,31 +88,31 @@ void battery_thread(void *, void *, void *) {
   std::int64_t counted_ms = k_uptime_get();
   while(true) {
     // The loop runs a little slower than its period; count the real time, keeping the remainder.
-    auto idle_s = static_cast<unsigned>((k_uptime_get() - counted_ms) / 1000);
-    counted_ms += std::int64_t{idle_s} * 1000;
+    auto idle = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds{k_uptime_get() - counted_ms});
+    counted_ms += std::chrono::duration_cast<std::chrono::milliseconds>(idle).count();
     int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
     if(millivolts < 0) {
       LOG_WRN("ADC read: %d", millivolts);
-      with_controller([&](gtfog::controller &control) { control.elapsed(idle_s, ble_connected()); });
+      with_controller([&](gtfog::controller &control) { control.elapsed(idle, ble_connected()); });
     } else {
       auto status = make_status(millivolts);
       LOG_DBG("%d mV, charger %d", millivolts, static_cast<int>(status.charger));
       auto percent = with_controller([&](gtfog::controller &control) {
         control.handle(status);
-        control.elapsed(idle_s, ble_connected());
+        control.elapsed(idle, ble_connected());
         return control.battery_level();
       });
       ble_battery_changed(percent);
       ble_charger_changed(status.charger);
     }
     if(watchdog_channel >= 0) {
-      std::ignore = wdt_feed(watchdog, watchdog_channel);
+      std::ignore = wdt_feed(watchdog, watchdog_channel); // A failed feed ends in a reset, which is the safe outcome.
     }
     k_sleep(K_SECONDS(sample_interval_s));
   }
 }
 
-K_THREAD_DEFINE(battery, 1024, battery_thread, nullptr, nullptr, nullptr, 7, 0, 500);
+K_THREAD_DEFINE(battery, 1536, battery_thread, nullptr, nullptr, nullptr, 7, 0, 500);
 
 } // namespace
 

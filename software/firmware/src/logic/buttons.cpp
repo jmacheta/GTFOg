@@ -6,10 +6,7 @@
 namespace gtfog {
 
 auto button_gestures::update(bool plus_pressed, bool minus_pressed, std::chrono::milliseconds now) noexcept -> std::optional<button_event> {
-  if(waiting) {
-    if(plus_pressed || minus_pressed) {
-      return std::nullopt;
-    }
+  if(!plus_pressed && !minus_pressed) {
     waiting = false;
   }
 
@@ -35,8 +32,11 @@ auto button_gestures::update(bool plus_pressed, bool minus_pressed, std::chrono:
     return fire_power_off ? std::optional{button_event{button_action::power_off}} : std::nullopt;
   }
 
+  if(waiting) {
+    return std::nullopt;
+  }
   if(auto event = single(plus, plus_pressed, button_action::plus, now)) {
-    std::ignore = single(minus, minus_pressed, button_action::minus, now);
+    std::ignore = single(minus, minus_pressed, button_action::minus, now); // Only the plus event is reported; this call keeps minus's state current.
     return event;
   }
   return single(minus, minus_pressed, button_action::minus, now);
@@ -74,8 +74,9 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
   if(now < b.next_repeat) {
     return std::nullopt;
   }
+  bool later = b.next_repeat != b.pressed_at + timing.long_press;
   b.next_repeat = now + timing.repeat_interval;
-  return button_event{action, steps_after(held)};
+  return button_event{action, steps_after(held), later};
 }
 
 auto button_gestures::short_plus(std::chrono::milliseconds now) noexcept -> button_event {

@@ -35,6 +35,14 @@ K_SEM_DEFINE(shutdown_done, 0, 1);
 
 auto wanted() -> bool { return !shutdown && (streaming || motion_mode); }
 
+// Waits for the next retry; a give from before the call does not cut the wait short. Only a later change does.
+void wait_before_retry(k_timeout_t delay) {
+  k_sem_reset(&wanted_changed);
+  if(wanted()) {
+    std::ignore = k_sem_take(&wanted_changed, delay); // A timeout is the normal end.
+  }
+}
+
 void power_down() { std::ignore = gpio_pin_configure_dt(&power, GPIO_OUTPUT_INACTIVE); }
 
 auto power_up() -> int {
@@ -93,7 +101,7 @@ void accelerometer_thread(void *, void *, void *) {
       if(lost) {
         sensor_gone();
       }
-      k_sem_take(&wanted_changed, lost ? lost_retry_delay : retry_delay);
+      wait_before_retry(lost ? lost_retry_delay : retry_delay);
       continue;
     }
     gtfog::activity_classifier classifier;
@@ -149,7 +157,7 @@ void accelerometer_thread(void *, void *, void *) {
         LOG_WRN("no samples, power cycling the sensor");
         if(verdict_now == verdict::lost) {
           power_down();
-          k_sem_take(&wanted_changed, lost_retry_delay); // A settings change may cut this short.
+          wait_before_retry(lost_retry_delay);
         }
         break; // Back to power_up().
       }

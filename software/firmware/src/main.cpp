@@ -16,8 +16,8 @@ int main() {
   if(ble_err != 0) {
     LOG_ERR("Bluetooth: %d", ble_err);
   }
-  // A new image runs on trial after an update. It confirms itself only when Bluetooth works, the update path for the
-  // next fix; otherwise MCUboot reverts it on the next reset. This comes before the battery check, which may power off.
+  // A new image confirms itself only when Bluetooth works, else MCUboot reverts it on the next reset.
+  // This comes before the battery check, which may power off.
   if(ble_err == 0 && !boot_is_img_confirmed() && boot_write_img_confirmed() != 0) {
     LOG_ERR("cannot confirm the image");
   }

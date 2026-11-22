@@ -157,18 +157,18 @@ ZTEST(controller, test_auto_off_after_idle_time) {
   controller c{out};
   c.configure({.auto_off_minutes = 1});
   c.power_on();
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   c.handle(button_event{button_action::minus, 1}); // A button press restarts the count.
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, true); // A connected phone keeps it on.
+  c.elapsed(10s, true); // A connected phone keeps it on.
   c.set_fan_speed(10);
-  c.elapsed(120, false); // So does a running fan.
+  c.elapsed(120s, false); // So does a running fan.
   zassert_false(out.powered_off);
   c.set_fan_speed(0);
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, false);
+  c.elapsed(10s, false);
   zassert_true(out.powered_off);
 }
 
@@ -176,7 +176,7 @@ ZTEST(controller, test_auto_off_disabled) {
   fake_outputs out;
   controller c{out};
   c.power_on();
-  c.elapsed(1'000'000, false);
+  c.elapsed(1'000'000s, false);
   zassert_false(out.powered_off);
 }
 
@@ -454,20 +454,20 @@ ZTEST(controller, test_motion_mode_auto_off_counts_time_at_level_still) {
   c.update_settings({.auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5, .motion_speed = {20, 50, 80}});
   c.power_on();
   zassert_equal(out.fan, 20);
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   c.handle(button_event{button_action::minus, 1}); // A button press restarts the count.
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, true); // So does a phone.
-  c.elapsed(50, false);
+  c.elapsed(10s, true); // So does a phone.
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
   feed(c, activity_level::walking, 2); // So does movement.
-  c.elapsed(120, false);
+  c.elapsed(120s, false);
   zassert_false(out.powered_off);
   feed(c, activity_level::still, 5);
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, false);
+  c.elapsed(10s, false);
   zassert_true(out.powered_off);
 }
 
@@ -540,9 +540,9 @@ ZTEST(controller, test_motion_mode_with_transport_lock_counts_movement_as_idle) 
   c.update_settings({.transport_lock = true, .auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5});
   c.power_on();
   feed(c, activity_level::running, 2);
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, false);
+  c.elapsed(10s, false);
   zassert_true(out.powered_off, "the locked fan is off, so movement is no use");
 }
 
@@ -552,12 +552,12 @@ ZTEST(controller, test_lost_sensor_in_motion_mode_ends_in_auto_off) {
   c.update_settings({.auto_off_minutes = 1, .mode = fan_mode::motion, .motion_delay_s = 5, .motion_speed = {20, 50, 80}});
   c.power_on();
   feed(c, activity_level::running, 2);
-  c.elapsed(120, false);
+  c.elapsed(120s, false);
   zassert_false(out.powered_off);
   c.sensor_lost();
-  c.elapsed(50, false);
+  c.elapsed(50s, false);
   zassert_false(out.powered_off);
-  c.elapsed(10, false);
+  c.elapsed(10s, false);
   zassert_true(out.powered_off);
 }
 
@@ -574,4 +574,96 @@ ZTEST(controller, test_charger_fault_does_not_hide_a_low_cell) {
     c.handle(battery_status{3200, charger_state::fault});
   }
   zassert_true(out.powered_off, "only the charging state excuses a low cell");
+}
+
+ZTEST(controller, test_short_settings_forms_keep_the_fields_they_do_not_carry) {
+  device_settings base{.fan_step = 10, .mode = fan_mode::motion, .motion_delay_s = 30, .motion_speed = {40, 60, 80}};
+  std::uint8_t const v1[] = {1, 15};
+  zassert_true(
+      (decode_settings(v1, base) ==
+       device_settings{
+           .stealth = true, .auto_off_minutes = 15, .fan_step = 10, .mode = fan_mode::motion, .motion_delay_s = 30, .motion_speed = {40, 60, 80}}));
+  std::uint8_t const v2[] = {0, 0, 5, 0, 60, 10};
+  zassert_true((decode_settings(v2, base) == device_settings{.motion_speed = {10, 60, 80}}));
+}
+
+ZTEST(controller, test_changing_the_fan_mode_resets_the_activity_level) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.mode = fan_mode::motion});
+  c.power_on();
+  c.observe(activity_level::running);
+  c.observe(activity_level::running);
+  zassert_equal(c.activity_code(), 2);
+  c.update_settings({.stealth = true, .mode = fan_mode::motion}); // Same mode: the level stays.
+  zassert_equal(c.activity_code(), 2);
+  c.update_settings({.mode = fan_mode::manual});
+  zassert_equal(c.activity_code(), 255);
+  c.update_settings({.mode = fan_mode::motion});
+  zassert_equal(c.activity_code(), 0);
+  zassert_equal(out.fan, 20);
+}
+
+ZTEST(controller, test_observe_under_the_transport_lock_keeps_the_fan_off) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.transport_lock = true, .mode = fan_mode::motion});
+  c.power_on();
+  c.observe(activity_level::running);
+  c.observe(activity_level::running);
+  zassert_equal(c.fan_speed(), 0);
+  zassert_equal(out.fan, 0);
+}
+
+ZTEST(controller, test_locked_signal_once_per_press) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.transport_lock = true});
+  c.power_on();
+  out.signals.clear();
+  c.handle(button_event{button_action::plus, 1, false});
+  for(int i = 0; i != 5; ++i) {
+    c.handle(button_event{button_action::plus, 2, true});
+  }
+  zassert_true(out.signals == std::vector{signal::locked});
+  zassert_false(out.powered_off);
+}
+
+ZTEST(controller, test_speed_limit_signal_at_both_ends_by_click_and_unlock) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.fan_step = 5});
+  c.power_on();
+  c.set_fan_speed(98);
+  c.handle(button_event{button_action::unlock}); // Not locked: a plus click.
+  zassert_equal(out.fan, 100);
+  zassert_equal(out.signals.back(), signal::speed_limit);
+  c.set_fan_speed(3);
+  c.handle(button_event{button_action::minus, 1});
+  zassert_equal(out.fan, 0);
+  zassert_equal(out.signals.back(), signal::speed_limit);
+}
+
+ZTEST(controller, test_transport_lock_powers_off_after_a_minute_without_a_phone) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.transport_lock = true, .auto_off_minutes = 30});
+  c.power_on();
+  c.elapsed(50s, false);
+  c.handle(button_event{button_action::plus}); // Activity restarts the count.
+  c.elapsed(50s, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10s, true); // A connected phone keeps it on.
+  c.elapsed(50s, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10s, false);
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_unlocked_device_with_auto_off_never_stays_on) {
+  fake_outputs out;
+  controller c{out};
+  c.power_on();
+  c.elapsed(600s, false);
+  zassert_false(out.powered_off);
 }

@@ -2,6 +2,8 @@
 
 #include <zephyr/ztest.h>
 
+#include <initializer_list>
+
 using namespace gtfog;
 
 ZTEST_SUITE(battery, nullptr, nullptr, nullptr, nullptr, nullptr);
@@ -71,4 +73,14 @@ ZTEST(battery, test_start_needs_a_margin_above_the_cutoff) {
   zassert_true(battery_allows_start({3400, charger_state::not_charging}));
   zassert_true(battery_allows_start({3000, charger_state::charging}));
   zassert_false(battery_allows_start({3000, charger_state::fault}));
+}
+
+ZTEST(battery, test_percentage_at_every_knot_of_the_curve) {
+  struct knot {
+    int millivolts;
+    unsigned percent;
+  };
+  for(auto k : {knot{3300, 0}, knot{3500, 5}, knot{3600, 10}, knot{3700, 30}, knot{3800, 50}, knot{3900, 65}, knot{4000, 80}, knot{4200, 100}}) {
+    zassert_equal(battery_percentage(k.millivolts), k.percent, "%d mV", k.millivolts);
+  }
 }

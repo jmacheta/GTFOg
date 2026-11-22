@@ -19,6 +19,7 @@ enum class button_action {
 struct button_event {
   button_action action;
   unsigned steps{1};
+  bool repeat{false}; // Not the first action of this press: a later repeat of a held button.
 
   bool operator==(button_event const &) const = default;
 };
@@ -44,7 +45,8 @@ public:
   // Call on every pin change and periodically while a button is pressed; returns at most one action per call.
   [[nodiscard]] auto update(bool plus_pressed, bool minus_pressed, std::chrono::milliseconds now) noexcept -> std::optional<button_event>;
 
-  // Ignores the buttons until both have been seen released once; for a press that is still going on at boot.
+  // Ignores single-button actions until both buttons have been seen released once, for a press that is still going on at boot;
+  // the power-off chord still works.
   void wait_for_release() noexcept { waiting = true; }
 
   // True when no button needs a timer (none pressed, or only stuck ones), so the caller can wait for the next pin change.

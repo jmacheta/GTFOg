@@ -6,6 +6,7 @@
 #include "buttons.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -36,7 +37,7 @@ enum class fan_mode : std::uint8_t {
 struct device_settings {
   bool stealth{false};              // The status LED never lights up.
   bool transport_lock{false};       // Buttons only wake the device and power it off; fan and strobe stay off.
-  std::uint8_t auto_off_minutes{0}; // Power off after this long idle (fan and strobe off, no phone); 0 never.
+  std::uint8_t auto_off_minutes{0}; // Power off after this long idle (fan and strobe off, no phone); 0 never. While locked: 1 minute.
   std::uint8_t fan_step{5};         // Fan change per button click, in %, 1..25.
   fan_mode mode{fan_mode::manual};
   std::uint8_t motion_delay_s{60};                       // Motion mode: seconds of lower activity before the fan slows down, 5..255.
@@ -49,7 +50,8 @@ struct device_settings {
 };
 
 // Wire and flash format: flags (bit 0 stealth, bit 1 transport lock), auto-off minutes, fan step, fan mode, motion delay in
-// seconds, still, walking and running speed. Shorter 6- and 2-byte forms are accepted; missing fields keep their defaults.
+// seconds, still, walking and running speed. Shorter 6- and 2-byte forms are accepted; fields they do not carry keep the
+// values of `base`.
 constexpr std::size_t settings_size = 8;
 constexpr std::size_t settings_size_v2 = 6;
 constexpr std::size_t settings_size_v1 = 2;
@@ -60,7 +62,7 @@ constexpr std::size_t settings_size_v1 = 2;
 [[nodiscard]] constexpr auto is_fan_percent(unsigned value) noexcept -> bool { return value <= 100; }
 [[nodiscard]] constexpr auto is_strobe_value(unsigned value) noexcept -> bool { return value <= 1; }
 [[nodiscard]] auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size>;
-[[nodiscard]] auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings>;
+[[nodiscard]] auto decode_settings(std::span<std::uint8_t const> bytes, device_settings base = {}) noexcept -> std::optional<device_settings>;
 
 // The hardware the controller drives. The firmware implements it on the board, the tests with a fake.
 class outputs {
@@ -115,7 +117,7 @@ public:
   // Activity measured over one second of accelerometer data; only used in motion mode.
   void observe(activity_level raw);
   // Counts idle time for the auto-off; call it periodically with the time since the last call.
-  void elapsed(unsigned seconds, bool phone_connected);
+  void elapsed(std::chrono::seconds passed, bool phone_connected);
 
   // What the fan runs at: the manual target, or in motion mode the target of the current activity level; 0 while the
   // transport lock is on (the targets are kept).
@@ -147,7 +149,7 @@ private:
   bool strobe_on{false};
   std::uint8_t battery{0};
   device_settings config;
-  unsigned idle_seconds{0};
+  std::chrono::seconds idle{0};
   bool battery_warned{false};
   battery_guard guard;
 };

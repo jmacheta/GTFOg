@@ -152,12 +152,11 @@ public:
   }
 
   void show(signal what) override {
-    k_work_cancel_delayable(&indicator_work);
     auto key = k_spin_lock(&pattern_lock);
     current_pattern = pattern_of(what);
     pattern_phase = 0;
     k_spin_unlock(&pattern_lock, key);
-    k_work_schedule(&indicator_work, K_NO_WAIT);
+    k_work_reschedule(&indicator_work, K_NO_WAIT); // Replaces a step that is waiting for its phase to end.
   }
 
   void settings_changed(device_settings const &settings) override {
@@ -167,11 +166,8 @@ public:
 
   void power_off() override {
     LOG_INF("power off");
-    // The caller holds the controller mutex until System OFF, so the battery thread cannot feed the 30 s watchdog.
-    // Worst case: pattern 1.6 s (low_battery 1.2 s plus a phase still running), flash write about 0.1 s, accelerometer
-    // 1 s, buttons 10 s: about 13 s.
-    // The system workqueue may be blocked on the controller mutex, which the caller holds: finish the pattern here and
-    // wait for no work item.
+    // The caller holds the controller mutex, so the watchdog is not fed: 30 s - 10 s since the last feed - 13 s here leaves about 7 s.
+    // The system workqueue may be blocked on that mutex, so the pattern finishes here and no work item is awaited.
     k_work_cancel_delayable(&indicator_work);
     auto key = k_spin_lock(&pattern_lock);
     auto shown = current_pattern;

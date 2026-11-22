@@ -32,12 +32,12 @@ Board layer (`src/`):
 | Thread | Priority | Stack | Job |
 | --- | --- | --- | --- |
 | `main` | Zephyr default | 2048 B (`CONFIG_MAIN_STACK_SIZE`) | Starts BLE, confirms the image, checks the battery, powers the controller on, returns |
-| `buttons` | 5 | 1024 B | Waits for a pin change; polls every 20 ms while a button is down |
-| `battery` | 7 | 1024 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
+| `buttons` | 5 | 1536 B | Waits for a pin change; polls every 20 ms while a button is down |
+| `battery` | 7 | 1536 B | Starts after 500 ms; samples every 10 s, then feeds the watchdog |
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
 The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
-(2048 B stack). Every thread reaches the controller through `with_controller`.
+(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 1536 B because power-off (flash save) runs in them; the headroom is not measured.
 
 ## Controller
 
@@ -48,7 +48,7 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 | --- | --- |
 | `check_start(status)` (`main()`, one ADC sample before `power_on`, after the image confirmation) | Below 3400 mV and not charging: signal `low_battery` and power off at once, the fan never starts (`battery_allows_start`). No ADC: the device starts |
 | `power_on()` | Signal `power_on`, strobe off, fan 0 (in motion mode the still speed, level still; under the transport lock always 0) |
-| Any button while `transport_lock` is on | Signal `locked`, nothing else; only `power_off` and `unlock` still work |
+| Any button while `transport_lock` is on | Signal `locked` once per press (not on the repeats of a held button), nothing else; only `power_off` and `unlock` still work |
 | `transport_lock` on | `fan_speed()` is 0 and `strobe()` false in both modes, also for Bluetooth writes and `power_on`; turning the lock on (Bluetooth) stops a running fan and strobe. The targets are kept, so unlocking restores them |
 | Button `plus` / `minus` | Fan speed `+steps * fan_step` / `-steps * fan_step`, clamped to 0..100, on the target of the current activity level in motion mode; signal `speed_up`, `speed_down`, or `speed_limit` when the result reaches 0 or 100 |
 | Button `unlock` | While locked: clears `transport_lock`, stores the settings, signal `unlocked`. Otherwise the same as `plus` with 1 step |
@@ -57,7 +57,7 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 | `set_fan_speed(percent)` (BLE) | Fan speed, clamped to 100; no signal. In motion mode it sets the target of the current activity level and stores the settings |
 | `set_strobe(on)` (BLE) | Strobe on or off; no signal |
 | `battery_status` | Stores the percentage; when `battery_guard` fires: strobe off, fan 0, signal `low_battery`, power off. Otherwise signal `battery_warning` once when the level reaches 10 % or less, armed again above 15 % |
-| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off`. Motion mode at level still counts as idle on purpose (goggles left on a shelf turn off), so a user who stays motionless for `auto_off_minutes` is powered off although the fan runs at the still speed; set auto-off to 0 or move, a phone connection also keeps it on |
+| `elapsed(seconds, phone_connected)` (every 10 s, real elapsed time) | Counts idle time: fan 0 (in motion mode: level still, whatever the still speed), strobe off and no phone; a button press restarts it. After `auto_off_minutes` (0 never): the same as `power_off`. Motion mode at level still counts as idle on purpose (goggles left on a shelf turn off), so a user who stays motionless for `auto_off_minutes` is powered off although the fan runs at the still speed; set auto-off to 0 or move, a phone connection also keeps it on. While `transport_lock` is on the limit is 1 minute whatever `auto_off_minutes` says (also 0 never), so a locked device woken in a bag turns itself off; a connected phone or a button press restarts the count |
 | `sensor_lost()` (accelerometer) | Level still (so motion mode runs at the still speed and the activity code is 0), signal `fault` |
 | `report(signal)` (board layer) | Shows the signal unless stealth: `pairing_refused`, `fault` |
 | `observe(level)` (accelerometer, once per second, motion mode) | Raw activity level of the last second; may switch the level, see [Motion mode](#motion-mode) |
@@ -67,9 +67,9 @@ the `device_settings`, and drives an `outputs` object. Signals go to `outputs::s
 ### Settings
 
 `device_settings`, written over BLE and kept in flash under the settings key `gtfog/cfg` (loaded by `app_settings_load()` at the start of `main()`, independent of
-Bluetooth, so a `bt_enable` failure keeps lock and stealth, and stealth also hides the power-on signal). Eight bytes (`encode`, `decode_settings`); the 6-byte format of firmware 0.3.1 (byte 5 is the still speed, the other
-speeds at their defaults) and the 2-byte format of firmware 0.2.0 (bytes 0 and 1, the rest at their defaults) are still
-accepted on writes and in flash, anything else is rejected:
+Bluetooth, so a `bt_enable` failure keeps lock and stealth, and stealth also hides the power-on signal). Eight bytes (`encode`, `decode_settings`); the 6-byte format of firmware 0.3.1 (byte 5 is the still speed) and the 2-byte format of firmware 0.2.0 (bytes 0 and 1) are still
+accepted on writes and in flash, anything else is rejected. A short write changes only the fields it carries and keeps the current values of the others;
+a short entry in flash is completed with the defaults (walking 50, running 100, and so on):
 
 | Byte | Contents |
 | --- | --- |
@@ -114,7 +114,7 @@ re-evaluates every 20 ms. Thresholds are `button_timing` defaults in `buttons.hp
 | Both held for 5 s | Power off, while still held (the strobe does not toggle) |
 | Three short presses of plus, the third within 2 s of the first | Third press is `unlock` instead of plus (see [Controller](#controller)) |
 
-A press that is still held when the thread starts (the press that woke the device) is ignored until both buttons have been released once. Once both buttons are down together, single-button actions stay off until both are released; letting one go before 2 s cancels the chord; letting one go later toggles the strobe. One action is returned per sample.
+A press that is still held when the thread starts (the press that woke the device) triggers no single-button action until both buttons have been released once; holding both from boot still powers off after 5 s. Once both buttons are down together, single-button actions stay off until both are released; letting one go before 2 s cancels the chord; letting one go later toggles the strobe. One action is returned per sample.
 
 ## Fan
 
@@ -182,7 +182,7 @@ response. Advertising restarts after a disconnect; when starting it fails, it is
 The control, charger and SMP characteristics and all CCC descriptors need an encrypted link (Just Works pairing, LE Secure Connections only: `CONFIG_BT_SMP_SC_ONLY`, so a phone without them cannot pair); bonds are stored
 in settings (NVS, `storage_partition`). Writes must have the exact length (1 byte, settings 2, 6 or 8); out-of-range values are rejected. Changes made by the
 buttons are notified to a connected phone. The settings store holds the device settings and the bonds: up to 4
-(`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest.
+(`CONFIG_BT_MAX_PAIRED`), and pairing a fifth device replaces the oldest. The firmware has no gesture or command that removes a bond. To clear all bonds, erase the flash over SWD (`west flash --erase`) and flash again; this also removes the settings.
 
 New pairings are accepted only in the first 3 minutes after boot (`pairing_accept` in `ble.cpp`; every wake from System OFF is a boot); later requests are refused with `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`. Bonded phones reconnect at any time. A refused request shows the `pairing_refused` signal (posted by a `k_work`, as the callback must not take the controller mutex). Pairing stays Just Works, but legacy pairing is not accepted.
 
@@ -213,13 +213,13 @@ in `ble_test.py`.
 `board_outputs::power_off()` runs under the controller mutex, so it waits for no work item: it cancels the LED pattern
 and plays the rest of it itself with `k_msleep` (the system workqueue may be blocked on the mutex), turns the LED off,
 saves a pending settings change (`ble_settings_flush`), cuts the accelerometer power, waits until both buttons are released (at most 10 s), arms both as level-active wake
-sources and calls `sys_poweroff()` (System OFF). A press wakes the chip through a reset. The mutex is held the whole time, so the battery thread cannot feed the watchdog; the worst case is about 13 s (pattern 1.6 s, flash 0.1 s, accelerometer 1 s, buttons 10 s) against the 30 s timeout, so a longer pattern or wait needs the watchdog margin rechecked.
+sources and calls `sys_poweroff()` (System OFF). A press wakes the chip through a reset. The mutex is held the whole time, so the battery thread cannot feed the watchdog; the worst case is about 13 s (pattern 1.6 s, flash 0.1 s, accelerometer 1 s, buttons 10 s). The last feed can be 10 s old, so the margin is 30 s - 10 s - 13 s, about 7 s, and a longer pattern or wait needs it rechecked.
 
 ## Watchdog
 
 The nRF hardware watchdog (`wdt0`, Zephyr `wdt` API, `CONFIG_WATCHDOG`) has a 30 s timeout, reset SoC, and pauses while
 the debugger halts the CPU. The `battery` thread starts it and feeds it every 10 s, right after it took and released the
-controller mutex, so a stuck mutex or thread resets the device (the fan is off after a reset). Not verified on hardware.
+controller mutex, so a stuck controller mutex or a dead `battery` thread resets the device (the fan is off after a reset); a hung `buttons` or `accelerometer` thread is not detected. Not verified on hardware.
 
 ## Firmware update and MCUboot
 

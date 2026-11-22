@@ -4,6 +4,10 @@
 
 namespace gtfog {
 
+namespace {
+constexpr std::chrono::minutes locked_auto_off{1};
+} // namespace
+
 auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_size> {
   return {static_cast<std::uint8_t>((s.stealth ? 1U : 0U) | (s.transport_lock ? 2U : 0U)),
           s.auto_off_minutes,
@@ -15,11 +19,14 @@ auto encode(device_settings s) noexcept -> std::array<std::uint8_t, settings_siz
           s.motion_speed[2]};
 }
 
-auto decode_settings(std::span<std::uint8_t const> bytes) noexcept -> std::optional<device_settings> {
+auto decode_settings(std::span<std::uint8_t const> bytes, device_settings base) noexcept -> std::optional<device_settings> {
   if(!is_settings_size(bytes.size()) || (bytes[0] & ~3U) != 0) {
     return std::nullopt;
   }
-  device_settings s{.stealth = (bytes[0] & 1U) != 0, .transport_lock = (bytes[0] & 2U) != 0, .auto_off_minutes = bytes[1]};
+  auto s = base;
+  s.stealth = (bytes[0] & 1U) != 0;
+  s.transport_lock = (bytes[0] & 2U) != 0;
+  s.auto_off_minutes = bytes[1];
   if(bytes.size() != settings_size_v1) {
     if(bytes[2] < 1 || bytes[2] > 25 || bytes[3] > 1 || bytes[4] < 5) {
       return std::nullopt;
@@ -65,9 +72,11 @@ void controller::sensor_lost() {
 }
 
 void controller::handle(button_event event) {
-  idle_seconds = 0;
+  idle = 0s;
   if(config.transport_lock && event.action != button_action::power_off && event.action != button_action::unlock) {
-    indicate(signal::locked);
+    if(!event.repeat) {
+      indicate(signal::locked);
+    }
     return;
   }
   switch(event.action) {
@@ -170,15 +179,17 @@ void controller::handle(battery_status status) {
   }
 }
 
-void controller::elapsed(unsigned seconds, bool phone_connected) {
+void controller::elapsed(std::chrono::seconds passed, bool phone_connected) {
   // In motion mode the fan always runs at some speed, so only movement counts as use.
   bool fan_in_use = config.mode == fan_mode::motion ? level != activity_level::still && !config.transport_lock : fan_speed() != 0;
   if(fan_in_use || strobe() || phone_connected) {
-    idle_seconds = 0;
+    idle = 0s;
     return;
   }
-  idle_seconds += seconds;
-  if(config.auto_off_minutes != 0 && idle_seconds >= config.auto_off_minutes * 60U) {
+  idle += passed;
+  // A locked device that is woken by accident (in a bag) must not idle until the cell is empty.
+  auto limit = config.transport_lock ? locked_auto_off : std::chrono::minutes{config.auto_off_minutes};
+  if(limit != 0min && idle >= limit) {
     power_off(signal::power_off);
   }
 }
