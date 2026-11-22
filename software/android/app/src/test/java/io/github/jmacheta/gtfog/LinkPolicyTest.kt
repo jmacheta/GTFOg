@@ -21,6 +21,16 @@ class LinkPolicyTest {
     }
 
     @Test
+    fun earlyDropsMustFallInsideTheWindow() {
+        val p = LinkPolicy()
+        assertEquals(Next.GiveUp, p.onDisconnect(19, up = true, bonded = true, nowMs = 0))
+        assertEquals(Next.GiveUp, p.onDisconnect(19, up = true, bonded = true, nowMs = 60_000))
+        assertEquals(Next.GiveUp, p.onDisconnect(19, up = true, bonded = true, nowMs = 130_000)) // first one too old: count restarts
+        assertEquals(Next.GiveUp, p.onDisconnect(19, up = true, bonded = true, nowMs = 140_000))
+        assertEquals(Next.AuthFailed, p.onDisconnect(19, up = true, bonded = true, nowMs = 150_000))
+    }
+
+    @Test
     fun earlyDropsWithRangeOrRadioStatusesAreNotAStaleBond() {
         for (s in listOf(8, 62, 133)) {
             val p = LinkPolicy()
@@ -107,6 +117,10 @@ class LinkPolicyTest {
         assertTrue(w.end("fan"))
         assertFalse(w.has("fan"))
         assertTrue(w.has("strobe"))
+        w.begin("fan") // interleaved: ending one key never touches the other
+        assertTrue(w.end("strobe"))
+        assertTrue(w.has("fan"))
+        assertFalse(w.has("strobe"))
         w.clear()
         assertFalse(w.has("strobe"))
     }

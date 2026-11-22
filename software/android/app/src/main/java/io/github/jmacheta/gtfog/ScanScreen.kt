@@ -154,7 +154,9 @@ fun ScanScreen(s: Session, st: DeviceState) {
                 if (!locOn) {
                     // Android 11 and older find no Bluetooth devices while Location is off.
                     Text("Location is off. This Android version needs it to find Bluetooth devices.", color = MaterialTheme.colorScheme.error)
-                    Button({ ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }, Modifier.heightIn(min = MainHeight)) { Text("Open Location settings") }
+                    Button(
+                        { ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }, Modifier.heightIn(min = MainHeight),
+                    ) { Text("Open Location settings") }
                 }
                 if (!scanning) Button({ s.startScan() }, Modifier.heightIn(min = MainHeight)) { Text("Scan again") }
                 Text(

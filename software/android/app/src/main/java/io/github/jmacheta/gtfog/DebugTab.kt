@@ -106,7 +106,10 @@ private fun AccelCard(s: Session, st: DeviceState) {
             if (rec.active) Text("Live stays on while recording. Stop the recording first.", style = MaterialTheme.typography.bodySmall)
             st.streamError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             st.mtu?.takeIf { it < 247 }?.let {
-                Text("ATT MTU is $it (247 needed): accelerometer frames may be cut.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "ATT MTU is $it (247 needed): accelerometer frames may be cut.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                )
             }
             ChoiceChips(WINDOWS.map { "$it s" to it }, windowS) { windowS = it }
             ChoiceChips(RANGES.map { (it?.let { r -> "±${r.toInt()} g" } ?: "auto") to it }, range) { range = it }
@@ -172,7 +175,7 @@ private fun Recordings(s: Session) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(f.name, style = MaterialTheme.typography.bodyMedium)
-                        Text("${f.length() / 1024} kB", style = MaterialTheme.typography.bodySmall)
+                        Text(if (busy) "recording…" else "${f.length() / 1024} kB", style = MaterialTheme.typography.bodySmall)
                     }
                     TextButton({ share(ctx, f) }, Modifier.heightIn(min = TouchHeight), enabled = !busy) { Text("Share") }
                     TextButton({ confirm = f }, Modifier.heightIn(min = TouchHeight), enabled = !busy) { Text("Delete") }

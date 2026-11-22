@@ -94,7 +94,8 @@ fun DeviceScreen(s: Session, st: DeviceState) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(st.name, style = MaterialTheme.typography.headlineSmall)
-                    Text(st.conn.text(), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodySmall)
+                    val status = if (dfu.running) "Updating firmware: ${dfu.phase.label} ${dfu.percent}%" else st.conn.text()
+                    Text(status, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodySmall)
                 }
                 OutlinedButton(
                     { if (rec.active) confirmDisconnect = true else s.disconnect() },

@@ -155,6 +155,7 @@ class Session(private val app: Application) {
 
     private fun onReconnect(now: Long) {
         tracker.resync()
+        if (!dfu.state.value.running) dfu.forget() // an outside change (SWD flash, another phone) may have swapped the firmware
         if (rec.value.active) write(csvReconnect(now))
     }
 

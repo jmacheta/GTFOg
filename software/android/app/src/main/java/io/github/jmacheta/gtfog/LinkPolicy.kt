@@ -2,6 +2,7 @@ package io.github.jmacheta.gtfog
 
 private const val FIRST_CONNECT_RETRIES = 3 // status 133 on the first direct connect is a common Android flake
 private const val EARLY_DROPS = 3 // bonded phone, link dropped before the services were found
+private const val EARLY_WINDOW_MS = 120_000L // ... and all of them within this time (the goggles switching off now and then is not a bad key)
 
 /** Only the statuses of an ordinary disconnect count as early drops; 8, 62, 133 are range and radio problems, not a bad key. */
 private val EARLY_DROP_STATUSES = setOf(0, 19, 22)
@@ -23,6 +24,7 @@ class LinkPolicy {
         private set
     private var firstFails = 0
     private var earlyDrops = 0
+    private var firstEarlyMs = 0L
 
     /** A new connection requested by the user. */
     fun reset() {
@@ -38,8 +40,15 @@ class LinkPolicy {
     }
 
     /** The GATT link ended with [status]; [up] = it had connected but the services were not ready, [bonded] = the phone has a bond. */
-    fun onDisconnect(status: Int, up: Boolean, bonded: Boolean): Next {
-        val early = up && bonded && status in EARLY_DROP_STATUSES && ++earlyDrops >= EARLY_DROPS
+    fun onDisconnect(status: Int, up: Boolean, bonded: Boolean, nowMs: Long = System.currentTimeMillis()): Next {
+        var early = false
+        if (up && bonded && status in EARLY_DROP_STATUSES) {
+            if (earlyDrops == 0 || nowMs - firstEarlyMs > EARLY_WINDOW_MS) {
+                earlyDrops = 0
+                firstEarlyMs = nowMs
+            }
+            early = ++earlyDrops >= EARLY_DROPS
+        }
         return if (isAuthFailure(status) || early) Next.AuthFailed else onLost(status == 133)
     }
 

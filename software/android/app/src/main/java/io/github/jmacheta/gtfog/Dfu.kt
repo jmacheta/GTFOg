@@ -38,6 +38,11 @@ private const val UPDATE_FAILED =
 /** True when mcumgr has shown no sign of life for [STALL_MS] (the update is then failed by the watchdog). */
 fun stalled(lastMs: Long, nowMs: Long, limitMs: Long = STALL_MS) = nowMs - lastMs >= limitMs
 
+/** Returns once [stalled] is true for the clock values given; [wait] is the pause between looks (a fake clock in tests). */
+suspend fun awaitStall(last: () -> Long, now: () -> Long, wait: suspend () -> Unit = { delay(5_000) }) {
+    while (!stalled(last(), now())) wait()
+}
+
 /** MCUboot version from the image header (offset 20), formatted like mcumgr: major.minor.revision[+build]. */
 fun parseImageVersion(b: ByteArray): String? {
     if (b.size < 24) return null
@@ -129,6 +134,7 @@ data class DfuState(
     val detail: String? = null,
     val done: Boolean = false,
     val refreshError: String? = null,
+    val versionLost: Boolean = false, // the goggles did not come back after an update, so the version is unknown
 )
 
 /** Firmware update over mcumgr SMP (nRF Connect Device Manager library) on a second GATT link to the connected device. */
@@ -144,7 +150,7 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     @Volatile private var image: ByteArray? = null
 
     /** A new connection: the installed version read earlier may belong to other goggles or an older firmware. */
-    fun forget() = _state.update { it.copy(installed = null, refreshError = null) }
+    fun forget() = _state.update { it.copy(installed = null, refreshError = null, versionLost = false) }
 
     /** Reads the version of slot 0 from the device (one read at a time; the error is shown in the card). */
     fun refresh(attempt: Int = 0) {
@@ -154,17 +160,17 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
         val t = McuMgrBleTransport(ctx, device)
         val answered = AtomicBoolean(false) // per call: a late answer of a timed-out call must not end a newer one
         var timeout: Job? = null
-        fun done(f: (DfuState) -> DfuState) {
+        fun done(f: (DfuState) -> DfuState): Boolean {
             timeout?.cancel()
-            if (!answered.compareAndSet(false, true)) return // answered or timed out already
+            if (!answered.compareAndSet(false, true)) return false // answered or timed out already
             refreshing.set(false)
             t.release()
             _state.update(f)
+            return true
         }
         // A failed read is tried again twice (the first access may only trigger pairing or a slow link).
         fun fail(text: String) {
-            done { it.copy(refreshError = text) }
-            if (attempt < 2) scope.launch {
+            if (done { it.copy(refreshError = text) } && attempt < 2) scope.launch {
                 delay(3_000)
                 if (client.state.value.conn == Conn.Connected && _state.value.installed == null) refresh(attempt + 1)
             }
@@ -254,10 +260,12 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
         manager = m
         // mcumgr may never call back (library hang, half-open link): do not lock the app for good.
         watchdog = scope.launch {
-            while (!stalled(last.get(), SystemClock.elapsedRealtime())) delay(5_000)
-            runCatching { m.cancel() }
-            finish { it.copy(error = UPDATE_FAILED, detail = "No answer from the goggles for ${STALL_MS / 1000} s") }
-            refreshWhenBack()
+            awaitStall(last::get, SystemClock::elapsedRealtime)
+            // Fail first: cancel() may call onUpgradeCanceled, which would end the update with "Update canceled" instead.
+            if (finish { it.copy(error = UPDATE_FAILED, detail = "No answer from the goggles for ${STALL_MS / 1000} s") }) {
+                runCatching { m.cancel() }
+                refreshWhenBack()
+            }
         }
         _state.update { it.copy(running = true, phase = DfuPhase.Connecting, percent = 0, error = null, detail = null, done = false) }
         runCatching {
@@ -275,7 +283,11 @@ class Dfu(private val ctx: Context, private val client: GtfogClient, private val
     /** Waits (at most 60 s) until the goggles are connected again, then reads the installed version. */
     private fun refreshWhenBack() {
         scope.launch {
-            if (withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } } != null) refresh()
+            if (withTimeoutOrNull(60_000) { client.state.first { it.conn == Conn.Connected } } != null) {
+                refresh()
+            } else {
+                _state.update { it.copy(versionLost = true) } // read again on the next connection (Settings tab, [forget])
+            }
         }
     }
 

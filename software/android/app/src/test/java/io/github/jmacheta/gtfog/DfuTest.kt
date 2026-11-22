@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
@@ -83,6 +84,27 @@ class DfuTest {
         assertNull(versionHint("0.3.5", "0.3.6"))
         assertNull(versionHint(null, "0.3.6"))
         assertNull(versionHint("0.3.5", null))
+    }
+
+    @Test
+    fun readCappedAcceptsExactlyTheLimit() {
+        assertEquals(MAX_IMAGE, ByteArray(MAX_IMAGE).inputStream().readCapped(MAX_IMAGE).size)
+        assertThrows(IllegalArgumentException::class.java) { ByteArray(MAX_IMAGE + 1).inputStream().readCapped(MAX_IMAGE) }
+    }
+
+    @Test
+    fun awaitStallReturnsWhenTheClockPassesTheLimit() {
+        var now = 0L
+        var last = 0L
+        var waits = 0
+        runBlocking {
+            awaitStall({ last }, { now }) {
+                waits++
+                now += 5_000
+                if (waits == 6) last = now // sign of life at 30 s: the limit restarts
+            }
+        }
+        assertEquals(30_000L + 90_000L, now)
     }
 
     @Test

@@ -222,6 +222,7 @@ class ProtocolTest {
     @Test
     fun settingsRejectWrongSize() {
         for (n in listOf(0, 1, 3, 4, 5, 7)) assertNull(parseSettings(ByteArray(n)))
+        assertEquals(8, parseSettings(ByteArray(9).also { it[2] = 5; it[4] = 30 })!!.size) // 9: the known 8 bytes are read
     }
 
     @Test
