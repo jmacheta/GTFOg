@@ -38,5 +38,6 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
+    implementation(libs.mcumgr.ble)
     testImplementation(libs.junit)
 }

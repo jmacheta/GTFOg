@@ -40,6 +40,7 @@ data class RecState(
 class Session(private val app: Application) {
     val ring = SampleRing(4096)
     val client = GtfogClient(app, ::onFrame, ::onReconnect)
+    val dfu = Dfu(app, client)
     val adapter = app.getSystemService(BluetoothManager::class.java)?.adapter
     val scanResults = MutableStateFlow<List<ScanItem>>(emptyList())
     val stats = MutableStateFlow(Stats())

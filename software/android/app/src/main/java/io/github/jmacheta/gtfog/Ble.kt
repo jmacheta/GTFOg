@@ -74,6 +74,8 @@ class GtfogClient(
         open(false)
     }
 
+    fun currentDevice() = device
+
     fun disconnect() {
         wantConnected = false
         live = false

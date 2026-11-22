@@ -1,8 +1,8 @@
 # Android app
 
 Kotlin / Jetpack Compose app in `software/android` that controls the GTFOg over Bluetooth LE and shows and records its accelerometer
-stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 35. No BLE or chart library: platform `BluetoothGatt` and
-Compose `Canvas`.
+stream. Package `io.github.jmacheta.gtfog`, minSdk 26, target/compile SDK 35. Platform `BluetoothGatt` for the app's own protocol, Compose `Canvas` for charts, and the
+Nordic nRF Connect Device Manager library (`no.nordicsemi.android:mcumgr-ble` 2.7.4) for firmware update only.
 
 ## Screens
 
@@ -10,7 +10,7 @@ Compose `Canvas`.
 | --- | --- |
 | Scan | LE scan filtered by the service UUID; name, address, RSSI; tap to connect. Asks for permissions and offers to enable Bluetooth |
 | Control (tab) | Battery icon drawn on a Canvas, filled to the level with the % beside it (bolt while charging; red with "!" and "Charger fault" on fault; grey outline when unknown), fan readout with slider and -5/+5, strobe switch, Mode (Manual; Motion disabled, coming soon) |
-| Settings (tab) | Stealth mode, Transport lock, Auto shutdown (Off, 5, 10, 15, 30, 60 min), model and manufacturer. Shows "Update the firmware to change settings" if the device lacks the settings characteristic |
+| Settings (tab) | Stealth mode, Transport lock, Auto shutdown (Off, 5, 10, 15, 30, 60 min), Firmware card (installed version, update), model and manufacturer. Shows "Update the firmware to change settings" if the device lacks the settings characteristic |
 | Debug (tab) | Accelerometer, recording and the list of recordings below |
 | Accelerometer (Debug) | Live switch, scrolling x/y/z chart in g, window 5/10/30 s, Y range auto/±2/±4/±8/±16 g, legend, \|a\|, measured samples/s, lost frames |
 | Recording (Debug) | Record/Stop, file name, duration, sample count; list of recordings with Share and Delete |
@@ -50,6 +50,17 @@ All UUIDs end in `-5c1e-4b8e-9d2a-6f0e1c3b4d50`.
 Accelerometer frame (little endian): `u16 seq`, `u8 rate_hz` (100), `u8 n` (at most 40), then `n` times `int16 x, y, z` in milli-g
 (range ±16 g). `seq` increases by 1 per frame and wraps; a gap counts as lost frames. Duplicate or reordered frames are not counted.
 GATT operations go through a serial queue (Android allows one at a time).
+
+## Firmware update
+
+Settings tab, Firmware card. The installed version is slot 0 of mcumgr image list, read when the tab is shown with a connection.
+"Update firmware..." opens the system file picker (`*/*`): a raw `zephyr.signed.bin` or the NCS `dfu_application.zip` (its single
+`.bin` is used). The MCUboot header magic `0x96f3b83d` is checked and the file version (header offset 20) is shown; anything else
+is an error. "Install" runs `FirmwareUpgradeManager` in `TEST_AND_CONFIRM` mode over `McuMgrBleTransport` (a second GATT link to
+the connected device; swap time 20 s, upload window 4, alignment 4): validate, upload (percent, Cancel), test, reset, confirm.
+The device resets and `GtfogClient` reconnects; the card then shows the new version. The screen stays on while it runs. The
+library 2.7.4 is the newest that builds with compileSdk 35 (2.8.0 and later require compileSdk 37). Helpers `parseImageVersion`
+and `loadImage` are in `Dfu.kt`, tested in `DfuTest.kt`. Not tested on a phone or device.
 
 ## Recording
 
@@ -94,6 +105,5 @@ in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the sa
 
 ## Open items
 
-- TODO: firmware update over SMP (mcumgr service `8D53DC1D-1DB7-4CD3-868B-8A527460AA84`). Not implemented.
 - If the process is killed during a recording, the file stays valid up to the last flushed frame but the recording is not resumed.
 - Not tested on a phone yet; only build, unit tests and lint ran.

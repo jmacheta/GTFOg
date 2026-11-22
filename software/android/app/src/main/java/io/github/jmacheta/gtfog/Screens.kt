@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -47,6 +48,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -69,6 +71,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -325,11 +328,58 @@ private fun SettingsTab(s: Session, st: DeviceState) {
             }
         }
     }
+    FirmwareCard(s, st)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("Device", style = MaterialTheme.typography.titleMedium)
             Text("Manufacturer: ${st.manufacturer ?: "-"}")
             Text("Model: ${st.model ?: "-"}")
+        }
+    }
+}
+
+@Composable
+private fun FirmwareCard(s: Session, st: DeviceState) {
+    val d by s.dfu.state.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
+    val view = LocalView.current
+    val connected = st.conn == Conn.Connected
+    LaunchedEffect(connected) { if (connected) s.dfu.refresh() }
+    DisposableEffect(d.running) {
+        view.keepScreenOn = d.running
+        onDispose { view.keepScreenOn = false }
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            var name = uri.lastPathSegment ?: "file"
+            var size = 0L
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = c.getString(it) }
+                    c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
+                }
+            }
+            val bytes = if (size > 4_000_000) null else runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            s.dfu.pick(name, bytes)
+        }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Firmware", style = MaterialTheme.typography.titleMedium)
+            Text("Installed version: ${d.installed ?: "-"}")
+            if (d.file != null) Text("File: ${d.file}" + (d.fileVersion?.let { " (version $it)" } ?: ""))
+            if (d.running) {
+                LinearProgressIndicator(progress = { d.percent / 100f }, Modifier.fillMaxWidth())
+                Text("${d.status} ${d.percent}%")
+                if (d.status == "Uploading") OutlinedButton({ s.dfu.cancel() }) { Text("Cancel") }
+            } else {
+                d.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (d.done) Text("Update installed and confirmed")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ picker.launch(arrayOf("*/*")) }, enabled = connected) { Text("Update firmware\u2026") }
+                    if (d.image != null) Button({ s.dfu.install() }, enabled = connected && !d.done) { Text("Install") }
+                }
+            }
         }
     }
 }

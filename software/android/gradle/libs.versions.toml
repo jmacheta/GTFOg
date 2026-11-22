@@ -7,6 +7,7 @@ lifecycle = "2.8.7"
 coreKtx = "1.16.0"
 coroutines = "1.9.0"
 junit = "4.13.2"
+mcumgr = "2.7.4"
 
 [libraries]
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
@@ -16,6 +17,7 @@ activity-compose = { module = "androidx.activity:activity-compose", version.ref 
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+mcumgr-ble = { module = "no.nordicsemi.android:mcumgr-ble", version.ref = "mcumgr" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
