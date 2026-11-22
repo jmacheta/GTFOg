@@ -1,6 +1,7 @@
 #ifndef GTFOG_BATTERY_MODEL_HPP
 #define GTFOG_BATTERY_MODEL_HPP
 
+#include <algorithm>
 #include <cstdint>
 
 namespace gtfog {
@@ -17,6 +18,28 @@ enum class charger_state : std::uint8_t {
 
 // Remaining charge of a single Li-ion cell, 0..100 %, from its open-circuit-like voltage.
 [[nodiscard]] auto battery_percentage(int millivolts) noexcept -> std::uint8_t;
+
+// The battery level shown to the user. Under fan load the measured voltage is lower (cell resistance, wiring, ground) and
+// follows the fan's current, so the drop the fan causes is added back and the readings are averaged: the level neither
+// jumps between samples nor falls by a third when the fan starts. The cutoff (`battery_guard`) keeps the raw voltage.
+class battery_level_filter {
+public:
+  // ponytail: the reading's drop at fan 100 %, assumed linear in the speed; read the voltage with the fan off and at 100 % and tune.
+  static constexpr int fan_drop_millivolts = 300;
+  static constexpr int smoothing = 8; // Each sample (itself the average of a 10 s period) moves it 1/8 of the way: about 80 s.
+
+  [[nodiscard]] auto update(int millivolts, unsigned fan_percent) noexcept -> std::uint8_t {
+    int compensated = millivolts + fan_drop_millivolts * static_cast<int>(std::min(fan_percent, 100U)) / 100;
+    int step = (compensated - average) / smoothing;
+    average = first || step == 0 ? compensated : average + step; // The last few mV at once: integer steps would stop short.
+    first = false;
+    return battery_percentage(average);
+  }
+
+private:
+  int average{0};
+  bool first{true};
+};
 
 struct battery_status {
   int millivolts;

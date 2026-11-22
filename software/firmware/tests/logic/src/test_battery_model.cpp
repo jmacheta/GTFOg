@@ -3,6 +3,7 @@
 #include <zephyr/ztest.h>
 
 #include <initializer_list>
+#include <tuple>
 
 using namespace gtfog;
 
@@ -24,6 +25,21 @@ ZTEST(battery_model, test_percentage_is_clamped_and_monotonic) {
 
 ZTEST(battery_model, test_percentage_interpolates) {
   zassert_equal(battery_percentage(3750), 40); // Halfway between 3700 mV (30 %) and 3800 mV (50 %).
+}
+
+ZTEST(battery_model, test_level_filter_adds_back_the_fan_drop_and_smooths) {
+  battery_level_filter filter;
+  zassert_equal(filter.update(4200, 0), 100);
+  // The fan starts: the reading drops by the fan's share, which is added back.
+  zassert_equal(filter.update(4200 - battery_level_filter::fan_drop_millivolts, 100), 100);
+  // A single low sample moves the level only 1/smoothing of the way.
+  battery_level_filter noisy;
+  zassert_equal(noisy.update(3900, 0), 65);
+  zassert_equal(noisy.update(3500, 0), battery_percentage(3900 - 400 / battery_level_filter::smoothing));
+  for(int i = 0; i != 80; ++i) {
+    std::ignore = noisy.update(3500, 0);
+  }
+  zassert_equal(noisy.update(3500, 0), battery_percentage(3500), "a lasting drop is followed");
 }
 
 ZTEST(battery_model, test_charger_states) {

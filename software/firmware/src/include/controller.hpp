@@ -142,6 +142,7 @@ struct controller_data {
   unsigned low_battery_samples{0}; // Consecutive samples at or below `warning_percent`.
   bool exhausted{false};           // The cutoff guard's verdict on the last sample.
   battery_guard guard;
+  battery_level_filter level_filter;
 };
 
 namespace events {

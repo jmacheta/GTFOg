@@ -145,7 +145,7 @@ void controller_data::set_strobe(bool on) {
 }
 
 void controller_data::record_battery(battery_status status) {
-  battery = battery_percentage(status.millivolts);
+  battery = level_filter.update(status.millivolts, fan_speed());
   low_battery_samples = battery <= warning_percent ? low_battery_samples + 1 : 0;
   exhausted = guard.update(status);
 }

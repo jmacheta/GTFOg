@@ -401,19 +401,17 @@ ZTEST(controller, test_battery_warning_once_and_rearmed) {
       c.handle(battery_status{millivolts, charger_state::not_charging});
     }
   };
-  sample(3800, 3);
+  sample(3800, 40);
   zassert_equal(count(), 0);
-  sample(3600, 2); // 10 %, but not yet 3 samples in a row.
+  sample(3500, 2); // Dips under fan inrush: the averaged level stays above 10 %.
+  sample(3800, 40);
   zassert_equal(count(), 0);
-  sample(3800, 1); // A dip under fan inrush ends the run.
-  sample(3600, 2);
-  zassert_equal(count(), 0);
-  sample(3600, 1);
+  sample(3600, 40); // 10 %, settled.
   zassert_equal(count(), 1);
-  sample(3550, 3);
+  sample(3550, 40);
   zassert_equal(count(), 1);
-  sample(3700, 1); // 30 %: above 15 %, re-armed.
-  sample(3580, 3);
+  sample(3700, 40); // 30 %: above 15 %, re-armed.
+  sample(3580, 40);
   zassert_equal(count(), 2);
   zassert_false(out.powered_off);
 }
@@ -425,7 +423,7 @@ ZTEST(controller, test_battery_warning_is_rearmed_only_above_15_percent) {
   controller c{out};
   auto count = [&] { return std::count(out.signals.begin(), out.signals.end(), signal::battery_warning); };
   auto sample = [&](int millivolts) {
-    for(int i = 0; i != 3; ++i) {
+    for(int i = 0; i != 40; ++i) { // Until the averaged level settles.
       c.handle(battery_status{millivolts, charger_state::not_charging});
     }
   };

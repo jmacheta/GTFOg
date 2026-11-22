@@ -205,7 +205,7 @@ ZTEST(controller_machine, test_battery_warning_once_until_the_cell_recovers) {
   controller c{out};
   auto count = [&] { return std::count(out.signals.begin(), out.signals.end(), signal::battery_warning); };
   auto sample = [&](int millivolts) {
-    for(int i = 0; i != 3; ++i) { // The warning needs 3 samples in a row.
+    for(int i = 0; i != 40; ++i) { // Until the averaged level settles (the warning needs 3 samples in a row).
       c.handle(battery_status{millivolts, charger_state::not_charging});
     }
   };

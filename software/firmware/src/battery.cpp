@@ -69,11 +69,16 @@ auto setup() -> int {
 }
 
 auto read_millivolts() -> int {
+  // One 10 us sample catches the ripple of the fan's boost converter at random: average 2^8 samples (about 3 ms) in the
+  // SAADC and calibrate its offset on every read (every 10 s, so temperature drift does not matter).
+  constexpr std::uint8_t oversampling = 8;
   std::int16_t sample{};
   adc_sequence sequence{.buffer = &sample, .buffer_size = sizeof(sample)};
   if(int err = adc_sequence_init_dt(&vbat, &sequence); err != 0) {
     return err;
   }
+  sequence.oversampling = oversampling;
+  sequence.calibrate = true;
   if(int err = adc_read_dt(&vbat, &sequence); err != 0) {
     return err;
   }
@@ -82,6 +87,26 @@ auto read_millivolts() -> int {
     return err;
   }
   return millivolts * vbat_divider;
+}
+
+// The fan's current makes single reads jump by hundreds of mV; the controller needs one value per period, so the reads of the
+// whole period are averaged. Takes the period; failed reads are left out, all failing returns the last error.
+constexpr int reads_per_sample = 50;
+
+auto read_period_average() -> int {
+  int sum = 0;
+  int good = 0;
+  int err = -EIO;
+  for(int i = 0; i != reads_per_sample; ++i) {
+    k_msleep(sample_interval_s * 1000 / reads_per_sample);
+    if(int millivolts = read_millivolts(); millivolts < 0) {
+      err = millivolts;
+    } else {
+      sum += millivolts;
+      ++good;
+    }
+  }
+  return good != 0 ? sum / good : err;
 }
 
 gtfog::battery_status make_status(int millivolts) {
@@ -110,7 +135,8 @@ void battery_thread(void *, void *, void *) {
     if(setup_err != 0) {
       setup_err = setup(); // Retried every period; a failure counts as a failed read below.
     }
-    int millivolts = setup_err == 0 ? read_millivolts() : setup_err;
+    bool averaged = setup_err == 0;
+    int millivolts = averaged ? read_period_average() : setup_err; // The average takes the whole period.
     // Fed right after the controller mutex section, before anything that may block (notifications).
     auto feed_watchdog = [] {
       if(watchdog_channel >= 0) {
@@ -143,7 +169,9 @@ void battery_thread(void *, void *, void *) {
       ble_battery_changed(percent);
       ble_charger_changed(status.charger);
     }
-    k_sleep(K_SECONDS(sample_interval_s));
+    if(!averaged) {
+      k_sleep(K_SECONDS(sample_interval_s));
+    }
   }
 }
 

@@ -87,6 +87,8 @@ Marked `ponytail:` in the code (grep for it); tune them on a board.
 | `vbat_divider` | 2 (47k/47k on the POWER sheet) | `battery.cpp` |
 | `fan_min_duty_permille` | 200 | `board.cpp` |
 | Li-ion curve | 8 points, 3300..4200 mV | `battery_model.cpp` |
+| `fan_drop_millivolts`, `smoothing` | 300 mV at fan 100 %, 1/8 per sample | `battery_model.hpp` |
+| `reads_per_sample` | 50 reads per 10 s period | `battery.cpp` |
 | `walk_threshold_milli_g`, `run_threshold_milli_g` | 80, 300 mg (standard deviation per second) | `motion.hpp` |
 | `rise_seconds` | 2 s above the level before it rises (down: `motion_delay_s` setting) | `controller.cpp` |
 | `warning_percent`, `recovered_percent`, `warning_samples` | 10 %, 15 %, 3 samples (30 s) | `controller.hpp` |

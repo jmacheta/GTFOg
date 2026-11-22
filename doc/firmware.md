@@ -153,12 +153,16 @@ and blinks; a new signal replaces the running one.
 ## Battery and charger
 
 - `battery` thread: ADC channel `vbat` (AIN4, P0.28, gain 1/6, 12 bit) times `vbat_divider` (2, a 47k/47k divider on
-  the POWER sheet), and the charger STAT1 (P0.03) and STAT2 (P0.02) levels, every 10 s.
+  the POWER sheet), and the charger STAT1 (P0.03) and STAT2 (P0.02) levels, every 10 s. One sample is the average of 50
+  reads spread over the 10 s period, each itself 256 SAADC samples (oversampling, offset calibration on every read): under
+  fan load single reads jump by hundreds of mV.
 - Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)` per the datasheet status table: both high is not
   charging (charge done, sleep or no input power), STAT1 high and STAT2 low is charging, STAT1 low is a fault (with STAT2
   high recoverable: input overvoltage, TS hot or cold, thermal shutdown, system short; both low latched).
 - `battery_percentage(mV)`: linear interpolation of a Li-ion curve: 3300 mV 0 %, 3500 5 %, 3600 10 %, 3700 30 %,
-  3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. Reported through the BLE Battery Service. The charger state also goes to the charger characteristic.
+  3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. The level shown (BLE Battery Service, warning) comes from
+  `battery_level_filter`: it adds back the reading's drop under fan load (`fan_drop_millivolts` at 100 %, linear in the speed)
+  and moves 1/8 of the way per sample (about 80 s). The cutoff below uses the period average without that correction. The charger state also goes to the charger characteristic.
 - `battery_guard`: 3 consecutive samples below 3300 mV while the charger is not charging make the
   controller show the red low-battery signal and power off. Any other sample resets the count.
 - The `vdd` ADC channel (VDDH / 5) is in the devicetree and not sampled.
