@@ -2,7 +2,6 @@
 
 Zephyr C++ application in `software/firmware`, built with MCUboot through sysbuild. Design rules are in
 [design/principles.md](design/principles.md); build steps in [design/build_and_tooling.md](design/build_and_tooling.md).
-Everything below describes the code as it is; unclear points are in [Open questions](#open-questions).
 
 ## Modules
 
@@ -40,7 +39,7 @@ Board layer (`src/`):
 | `accelerometer` | 10 | 1536 B | Starts after 100 ms; sleeps with the sensor unpowered; while streaming or in motion mode powers it and reads the FIFO every 200 ms |
 
 The strobe, the LED patterns, BLE notifications, saving the settings and the advertising restart run on the system workqueue
-(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 2048 B because power-off (flash save) runs in them; the headroom is not measured.
+(2048 B stack). Every thread reaches the controller through `with_controller`. The `buttons` and `battery` stacks are 2048 B because power-off (flash save) runs in them.
 
 ## Controller
 
@@ -157,8 +156,7 @@ and blinks; a new signal replaces the running one.
   the POWER sheet), and the charger STAT1 (P0.03) and STAT2 (P0.02) levels, every 10 s.
 - Charger BQ25185 (POWER sheet). `decode_charger_state(stat1, stat2)` per the datasheet status table: both high is not
   charging (charge done, sleep or no input power), STAT1 high and STAT2 low is charging, STAT1 low is a fault (with STAT2
-  high recoverable: input overvoltage, TS hot or cold, thermal shutdown, system short; both low latched). Board 2 with a
-  battery on USB reads STAT1 low, STAT2 high, a recoverable fault: check the TS network and the STAT wiring.
+  high recoverable: input overvoltage, TS hot or cold, thermal shutdown, system short; both low latched).
 - `battery_percentage(mV)`: linear interpolation of a Li-ion curve: 3300 mV 0 %, 3500 5 %, 3600 10 %, 3700 30 %,
   3800 50 %, 3900 65 %, 4000 80 %, 4200 100 %. Reported through the BLE Battery Service. The charger state also goes to the charger characteristic.
 - `battery_guard`: 3 consecutive samples below 3300 mV while the charger is not charging make the
@@ -211,8 +209,7 @@ drive the pin low, then drives it low itself.
 
 Notification frame (little endian, `pack_accelerometer_samples`): u16 `seq` (starts at 0 per subscription), u8 `rate_hz` (100), u8 `n`,
 then `n` x int16 x, y, z in mg (counts x 3.9). `n` is up to 40 at MTU 247 (`accelerometer_samples_per_packet`). A full
-controller buffer drops a packet; a gap in `seq` shows it. Checked ad hoc on a board: about 100 Hz, no gaps; this is not
-in `ble_test.py`.
+controller buffer drops a packet; a gap in `seq` shows it.
 
 ## RF carrier test
 
@@ -221,7 +218,7 @@ For bench measurements (spectrum analyzer, SDR, antenna checks) only: the goggle
 - Start: the Debug tab of the app writes `[channel, seconds]` to characteristic `a7f00008` (encrypted link; channel 0..39 is the BLE channel index: 37 -> 2402, 38 -> 2426, 39 -> 2480 MHz, data channels 0..10 -> 2404..2424 and 11..36 -> 2428..2478 MHz; seconds 1..255). A wrong length, channel or 0 seconds gets an ATT error; a second request while one is starting gets one too.
 - Run (`rf_test` thread, not the Bluetooth callback): 300 ms after the write response it saves a pending settings change, closes the link, stops the Bluetooth stack (`bt_disable`), starts HFXO, sets RADIO to BLE 1 Mbit at the channel's frequency and 0 dBm and triggers TXEN without START, so the transmitter idles in TXIDLE and sends the bare carrier. The fan and strobe are off and stay off (`board_outputs` ignores the controller while the test runs; button gestures are ignored too) and the status LED blinks blue once a second, also in stealth mode. The battery thread keeps feeding the watchdog; auto-off still counts (the idle timer is the controller's), so with a short auto-off or the transport lock (1 minute) the device may power off before the test ends.
 - Stop: any button press (after the first second) or the end of the time, then `sys_reboot(SYS_REBOOT_COLD)`, so Bluetooth comes back clean and the app reconnects. A phone cannot stop the test: the link is gone. If the radio does not start the test ends at once with the reboot.
-- Why not MPSL release: `mpsl_lib_uninit()` needs `CONFIG_MPSL_DYNAMIC_INTERRUPTS` and stops the clock the kernel runs on. MPSL stays initialised and idle after `bt_disable()` (no protocol stack or timeslot uses RADIO), and the test drives RADIO itself like the NCS `radio_test` sample. Not tested on hardware: check the carrier with a receiver or spectrum analyzer.
+- Why not MPSL release: `mpsl_lib_uninit()` needs `CONFIG_MPSL_DYNAMIC_INTERRUPTS` and stops the clock the kernel runs on. MPSL stays initialised and idle after `bt_disable()` (no protocol stack or timeslot uses RADIO), and the test drives RADIO itself like the NCS `radio_test` sample.
 
 ## Power off and wake-up
 
@@ -234,7 +231,7 @@ sources (a button still held after the wait is left out, as it would wake the ch
 
 The nRF hardware watchdog (`wdt0`, Zephyr `wdt` API, `CONFIG_WATCHDOG`) has a 30 s timeout, reset SoC, and pauses while
 the debugger halts the CPU. The `battery` thread starts it and feeds it every 10 s, right after it took and released the
-controller mutex, so a stuck controller mutex or a dead `battery` thread resets the device (the fan is off after a reset); a hung `buttons` or `accelerometer` thread is not detected. Not verified on hardware.
+controller mutex, so a stuck controller mutex or a dead `battery` thread resets the device (the fan is off after a reset); a hung `buttons` or `accelerometer` thread is not detected.
 
 ## Firmware update and MCUboot
 
@@ -244,7 +241,7 @@ USB in the application is gone; on the board USB is for charging, except for the
   `SB_CONFIG_MCUBOOT_MODE_SWAP_USING_MOVE` (swap with revert, no scratch partition) with downgrade prevention.
 - Update over Bluetooth: mcumgr SMP (`CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU`) into slot 1. The link must be encrypted
   (`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW_ENCRYPT`), so pair first.
-- Update with `smpmgr` (`pip install smpmgr`), verified on hardware; a 210 KB image uploads in about 16 s:
+- Update with `smpmgr` (`pip install smpmgr`):
 
 ```sh
 smpmgr --ble <address> image upload build/firmware/zephyr/zephyr.signed.bin
@@ -263,7 +260,7 @@ smpmgr --ble <address> os reset
   `smpmgr --port /dev/ttyACMx image upload ...`. MCUboot builds this on the legacy USB device stack (as it does for
   CDC ACM recovery on nRF52); only the bootloader has USB. While in recovery the red status LED is on
   (the status hook in `mcuboot_hooks/status.c` lights it by PWM). There is no timeout: leave recovery with the reset
-  button or by power-cycling. Not tested on hardware yet.
+  button or by power-cycling.
 - MCUboot status hooks (`software/firmware/mcuboot_hooks/`, linked into the MCUboot image by `sysbuild.cmake`): at
   startup MCUboot turns the fan, the RGB LED and the strobe off; while it installs an update the red strobe blinks at
   5 Hz (hardware PWM, 200 ms period) and stops before the application starts.
@@ -277,13 +274,3 @@ smpmgr --ble <address> os reset
 Off in the application (`CONFIG_LOG=n`, no boot banner); `LOG_*` calls stay in the code. To debug, set `CONFIG_LOG` and
 `CONFIG_LOG_BACKEND_RTT` (plus `CONFIG_USE_SEGGER_RTT`) and read it with a J-Link RTT client or `nrfutil`. MCUboot has
 logging off.
-
-## Open questions
-
-- The activity thresholds (80 and 300 mg) and the speed defaults are not calibrated; the watchdog, the 1 s recovery hold and the pairing window are not tested on hardware.
-- The VBAT divider needs checking on a board, and board 2 reports a charger fault on USB (see [Battery and charger](#battery-and-charger)).
-- MCUboot USB serial recovery is not tested on hardware.
-- BLE works on a second board (`ble_test.py` passes); the first board transmits but no host receives it. Its 32 MHz crystal was
-  measured at +215 ppm (see the errata in [hardware.md](hardware.md)) and X201 needs to be replaced.
-- Release builds need the private signing key (see above); pairing is Just Works (LE Secure Connections only) within the first 3 minutes after every wake, so anyone in range can pair then.
-- Hardware to verify: sensor recovery and loss handling, the 200 ms FIFO poll (no overflow), the boot battery check, the `fault` and `pairing_refused` patterns.

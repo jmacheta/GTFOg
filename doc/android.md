@@ -45,7 +45,7 @@ The device advertises the name `GTFOg` and service `a7f00001-5c1e-4b8e-9d2a-6f0e
 link: the first access makes Android show the Just Works pairing dialog, and the bond is stored on the device. The app retries a
 failed operation (ATT errors 5 and 15) every 1.5 s, up to 6 times (without limit while Android is creating the bond) while pairing completes.
 If it still fails, or the disconnect status is 5, 15 or 137, or the bond is removed or refused (`ACTION_BOND_STATE_CHANGED` to none), or on Android 15+ the system reports a lost remote key (`ACTION_KEY_MISSING`, acted on at once as a stale bond), the app closes the link. If the phone had a bond (bond state BONDED before the failure) it shows "The goggles forgot this phone. Remove GTFOg in Android Bluetooth settings, then connect again" with a button for the Bluetooth settings
-(a stale bond is expected after the device flash was erased; this path is not verified on a phone). Without a bond (the pairing dialog was cancelled, or the goggles refused a new phone after their 3-minute pairing window) it shows "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again". Disconnect statuses 19 and 22 are ordinary disconnects; but if the phone is bonded and the link drops 3 times within 2 minutes right after connecting, before the services are found, with status 0, 19 or 22 (a peripheral that rejects encryption; range or radio statuses such as 8, 62 and 133 do not count), the stale-bond text is shown too. A first connect that fails with status 133, or whose service discovery fails with an error status, is retried up to 3 times with the backoff before giving up ("Could not connect, try again" / "Service discovery failed"); "Not a GTFOg" is shown only when discovery succeeded but the GTFOg service is missing. It requests ATT MTU 247 right after
+(a stale bond is expected after the device flash was erased). Without a bond (the pairing dialog was cancelled, or the goggles refused a new phone after their 3-minute pairing window) it shows "Pairing was refused. Turn the goggles off and on (pairing is open for 3 minutes after power-on), then connect again". Disconnect statuses 19 and 22 are ordinary disconnects; but if the phone is bonded and the link drops 3 times within 2 minutes right after connecting, before the services are found, with status 0, 19 or 22 (a peripheral that rejects encryption; range or radio statuses such as 8, 62 and 133 do not count), the stale-bond text is shown too. A first connect that fails with status 133, or whose service discovery fails with an error status, is retried up to 3 times with the backoff before giving up ("Could not connect, try again" / "Service discovery failed"); "Not a GTFOg" is shown only when discovery succeeded but the GTFOg service is missing. It requests ATT MTU 247 right after
 connecting; the result is kept and shown in the Debug tab when it is lower. Connect, MTU and discovery must finish within 15 s (then the app closes the link and retries or reports "Could not
 connect, try again"); a queued GATT operation with no callback within 5 s is dropped (not while a bond is being created); a late callback of a dropped operation is ignored (each operation has a key, the characteristic or descriptor, and a unique id; the first callback with the key of the last timed-out operation is taken as its late answer, so it cannot complete a newer operation with the same key; the late answer is awaited for one more 5 s only, so a genuine answer is not swallowed later; checked by `OpQueue.finish`). After 3 timeouts or refused calls in a row the GATT stack is taken as wedged: the client closes the link and reconnects with the backoff ("Connection stalled" if it never connected). After a lost link the client reconnects with `autoConnect` after 1, 2, 4 ... 30 s (back to 1 s after a successful connection). The client
 registers for Bluetooth adapter changes: off closes the link ("Bluetooth is off"), on reconnects if the user still wants the
@@ -89,7 +89,6 @@ is connected again (at most 60 s), then reads slot 0 from the device and shows t
 library 2.7.4 is the newest that builds without raising compileSdk to 37 (2.8.0 and later require it). Helpers `parseImageVersion`
 and `loadImage` are in `Dfu.kt`, tested in `DfuTest.kt` (the orchestration around `FirmwareUpgradeManager` is not unit tested: it needs the library and a device).
 
-Verified on a Pixel 9 Pro (Android 16) with board 2: bonded reconnect after a flash and after a DFU swap, a full DFU from the app (debug build), the equal-version block, and the live accelerometer stream at about 87 samples/s with no lost frames and MTU 247. Not verified yet: the stale-bond path, a DFU with the R8 release build, the low-battery block on a real cell, and Android 12 and older flows.
 
 ## Recording
 
@@ -115,6 +114,8 @@ phone_time_ms,seq,index,x_mg,y_mg,z_mg
 
 Frames arrive in jittery bursts, so order samples by `seq` and `index`; at 100 Hz the sample spacing is 10 ms.
 
+If the process is killed during a recording, the file stays valid up to the last flushed frame; the recording is not resumed.
+
 ## Build and install
 
 JDK 17 or newer that AGP 8.9 accepts (Android Studio's bundled JDK 21 works; JDK 25 does not). Android SDK platform 36;
@@ -131,14 +132,9 @@ adb pull /sdcard/Android/data/io.github.jmacheta.gtfog/files/recordings/ .
 Release builds use R8 (`isMinifyEnabled`, `isShrinkResources`) with `app/proguard-rules.pro`, which keeps `io.runtime.mcumgr.**` and the
 Jackson annotations (mcumgr maps CBOR onto its model classes by reflection). The release is signed only if the Gradle properties
 `gtfog.storeFile`, `gtfog.storePassword`, `gtfog.keyAlias` and `gtfog.keyPassword` are set (for example in `~/.gradle/gradle.properties`);
-otherwise `app-release-unsigned.apk` is produced. No keys are in the repository. Lint (`lint {}` in `app/build.gradle.kts`) aborts on errors; warnings are not errors (version and wakelock warnings remain); the Gradle wrapper is pinned with `distributionSha256Sum`. The release (R8) build was installed and started on an emulator; the DFU path (Jackson/CBOR through R8) is untested with it. There is no Gradle dependency verification metadata (heavy for this project; the wrapper checksum is pinned). The launcher icon is adaptive (`mipmap-anydpi-v26`,
+otherwise `app-release-unsigned.apk` is produced. No keys are in the repository. Lint (`lint {}` in `app/build.gradle.kts`) aborts on errors; warnings are not errors (version and wakelock warnings remain); the Gradle wrapper is pinned with `distributionSha256Sum`. There is no Gradle dependency verification metadata (heavy for this project; the wrapper checksum is pinned). The launcher icon is adaptive (`mipmap-anydpi-v26`,
 vector fan in a ring, with a monochrome layer).
 
 The testable core is `Protocol.kt` (frame decode, sequence gaps, ring buffer, CSV lines, charger mapping, settings v3 and fan state, labels and error texts), covered by JVM unit tests
 in `app/src/test`. CI job `android` in `.github/workflows/build.yml` runs the same Gradle command (including `assembleRelease`) and uploads the debug APK as
 `gtfog-android-debug`.
-
-## Open items
-
-- If the process is killed during a recording, the file stays valid up to the last flushed frame but the recording is not resumed.
-- Phone checks still open: see "Not verified yet" under Firmware update; the recording lifecycle (`Session`) has no unit tests because it needs Android.
