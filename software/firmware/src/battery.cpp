@@ -11,6 +11,8 @@
 
 LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
 
+using gtfog::ble_battery_changed, gtfog::ble_charger_changed, gtfog::ble_connected, gtfog::with_controller;
+
 namespace {
 
 // ponytail: VBAT reaches AIN4 through a 47k/47k divider (POWER sheet); calibrate against a multimeter.
@@ -117,7 +119,7 @@ K_THREAD_DEFINE(battery, 1536, battery_thread, nullptr, nullptr, nullptr, 7, 0, 
 } // namespace
 
 // The setup is repeated by the battery thread, which is harmless; the ADC and the pins are only read.
-auto battery_sample() -> std::optional<gtfog::battery_status> {
+auto gtfog::battery_sample() -> std::optional<gtfog::battery_status> {
   if(setup() != 0) {
     return std::nullopt;
   }

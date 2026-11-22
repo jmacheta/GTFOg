@@ -14,6 +14,8 @@
 
 LOG_MODULE_REGISTER(accelerometer, LOG_LEVEL_INF);
 
+using gtfog::ble_accelerometer_samples_per_packet, gtfog::ble_accelerometer_send, gtfog::with_controller;
+
 namespace {
 
 constexpr std::uint8_t rate_hz = 100;
@@ -170,17 +172,17 @@ K_THREAD_DEFINE(accelerometer, 1536, accelerometer_thread, nullptr, nullptr, nul
 
 } // namespace
 
-void accelerometer_stream(bool on) {
+void gtfog::accelerometer_stream(bool on) {
   streaming = on;
   k_sem_give(&wanted_changed);
 }
 
-void accelerometer_motion_mode(bool on) {
+void gtfog::accelerometer_motion_mode(bool on) {
   motion_mode = on;
   k_sem_give(&wanted_changed);
 }
 
-void accelerometer_power_off() {
+void gtfog::accelerometer_power_off() {
   streaming = false;
   motion_mode = false;
   shutdown = true;

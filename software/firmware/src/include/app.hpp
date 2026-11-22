@@ -10,8 +10,10 @@
 #include <span>
 #include <utility>
 
+namespace gtfog {
+
 extern k_mutex controller_mutex;
-[[nodiscard]] auto app_controller() noexcept -> gtfog::controller &;
+[[nodiscard]] auto app_controller() noexcept -> controller &;
 
 // Runs `f(controller &)` with the controller locked; every thread goes through here.
 template <typename F> decltype(auto) with_controller(F &&f) {
@@ -31,18 +33,20 @@ void app_settings_load();
 [[nodiscard]] auto ble_connected() -> bool;
 void ble_state_changed(); // Notifies the fan speed and strobe state to a connected phone.
 void ble_battery_changed(std::uint8_t percent);
-void ble_charger_changed(gtfog::charger_state state);
+void ble_charger_changed(charger_state state);
 [[nodiscard]] auto ble_accelerometer_samples_per_packet() -> std::size_t; // 0 when nobody is connected.
 void ble_accelerometer_send(std::span<std::uint8_t const> packet);
 
-void ble_settings_changed(gtfog::device_settings const &settings); // Notifies the phone and stores them in flash after 2 s; does not block.
-void ble_settings_flush();                                         // Stores them now, in the calling thread (before System OFF).
+void ble_settings_changed(device_settings const &settings); // Notifies the phone and stores them in flash after 2 s; does not block.
+void ble_settings_flush();                                  // Stores them now, in the calling thread (before System OFF).
 
 // One synchronous battery sample (boot check); empty when the ADC does not work.
-[[nodiscard]] auto battery_sample() -> std::optional<gtfog::battery_status>;
+[[nodiscard]] auto battery_sample() -> std::optional<battery_status>;
 
 void accelerometer_stream(bool on);
 void accelerometer_motion_mode(bool on); // Powers the sensor for motion detection while on.
 void accelerometer_power_off();          // Cuts the sensor's power before System OFF; any thread, never takes the controller mutex.
+
+} // namespace gtfog
 
 #endif

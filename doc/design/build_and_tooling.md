@@ -31,7 +31,7 @@ Images land in `build/` (the application under `build/firmware/`, MCUboot under 
 
 ## Tests
 
-Ztest suites in `software/firmware/tests/logic` (`motion`, `battery_model`, `gestures`, `controller`, `controller_machine`) cover the pure logic; the test
+Ztest suites in `software/firmware/tests/logic` (`motion`, `battery_model`, `gestures`, `controller`, `controller_machine`) cover the pure logic (the Bluetooth and flash glue in `ble.cpp` is Zephyr code and has no host test); the test
 `CMakeLists.txt` includes `src/logic.cmake`, the same list the application uses. They run on the host with twister:
 
 ```sh

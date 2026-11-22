@@ -8,6 +8,7 @@
 #include <vector>
 
 using namespace gtfog;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -167,6 +168,17 @@ ZTEST(controller, test_auto_off_after_idle_time) {
   zassert_false(out.powered_off);
   c.set_fan_speed(0);
   c.elapsed(50s, false);
+  zassert_false(out.powered_off);
+  c.elapsed(10s, false);
+  zassert_true(out.powered_off);
+}
+
+ZTEST(controller, test_auto_off_of_255_minutes) {
+  fake_outputs out;
+  controller c{out};
+  c.configure({.auto_off_minutes = 255});
+  c.power_on();
+  c.elapsed(255min - 10s, false);
   zassert_false(out.powered_off);
   c.elapsed(10s, false);
   zassert_true(out.powered_off);
@@ -355,6 +367,19 @@ ZTEST(controller, test_motion_mode_slows_down_after_the_delay) {
   zassert_equal(c.activity_code(), 0);
 }
 
+ZTEST(controller, test_motion_mode_falls_to_the_highest_level_of_the_window_not_the_last_second) {
+  fake_outputs out;
+  controller c{out};
+  c.update_settings({.mode = fan_mode::motion, .motion_delay_s = 10, .motion_speed = {20, 50, 80}});
+  feed(c, activity_level::running, 2);
+  feed(c, activity_level::walking, 5);
+  feed(c, activity_level::still, 5); // The tenth second below running is a still one.
+  zassert_equal(c.activity_code(), 1, "walking was the highest level of the window");
+  zassert_equal(out.fan, 50);
+  feed(c, activity_level::still, 10);
+  zassert_equal(c.activity_code(), 0);
+}
+
 ZTEST(controller, test_motion_mode_buttons_and_remote_change_the_target_of_the_level) {
   fake_outputs out;
   controller c{out};
@@ -390,16 +415,47 @@ ZTEST(controller, test_battery_warning_once_and_rearmed) {
   fake_outputs out;
   controller c{out};
   auto count = [&] { return std::count(out.signals.begin(), out.signals.end(), signal::battery_warning); };
-  c.handle(battery_status{3800, charger_state::not_charging});
+  auto sample = [&](int millivolts, unsigned times) {
+    for(unsigned i = 0; i != times; ++i) {
+      c.handle(battery_status{millivolts, charger_state::not_charging});
+    }
+  };
+  sample(3800, 3);
   zassert_equal(count(), 0);
-  c.handle(battery_status{3600, charger_state::not_charging}); // 10 %.
+  sample(3600, 2); // 10 %, but not yet 3 samples in a row.
+  zassert_equal(count(), 0);
+  sample(3800, 1); // A dip under fan inrush ends the run.
+  sample(3600, 2);
+  zassert_equal(count(), 0);
+  sample(3600, 1);
   zassert_equal(count(), 1);
-  c.handle(battery_status{3550, charger_state::not_charging});
+  sample(3550, 3);
   zassert_equal(count(), 1);
-  c.handle(battery_status{3700, charger_state::not_charging}); // 30 %: above 15 %, re-armed.
-  c.handle(battery_status{3580, charger_state::not_charging});
+  sample(3700, 1); // 30 %: above 15 %, re-armed.
+  sample(3580, 3);
   zassert_equal(count(), 2);
   zassert_false(out.powered_off);
+}
+
+ZTEST(controller, test_battery_warning_is_rearmed_only_above_15_percent) {
+  zassert_equal(battery_percentage(3625), 15);
+  zassert_equal(battery_percentage(3630), 16);
+  fake_outputs out;
+  controller c{out};
+  auto count = [&] { return std::count(out.signals.begin(), out.signals.end(), signal::battery_warning); };
+  auto sample = [&](int millivolts) {
+    for(int i = 0; i != 3; ++i) {
+      c.handle(battery_status{millivolts, charger_state::not_charging});
+    }
+  };
+  sample(3600);
+  zassert_equal(count(), 1);
+  sample(3625); // Exactly 15 %: still warned.
+  sample(3600);
+  zassert_equal(count(), 1);
+  sample(3630); // 16 %.
+  sample(3600);
+  zassert_equal(count(), 2);
 }
 
 ZTEST(controller, test_battery_warning_respects_stealth) {
@@ -493,6 +549,17 @@ ZTEST(controller, test_report_respects_stealth) {
   c.configure({.stealth = true});
   c.report(signal::fault);
   zassert_true(out.signals.empty());
+}
+
+ZTEST(controller, test_charging_low_cell_starts) {
+  fake_outputs out;
+  controller c{out};
+  c.check_start({3000, charger_state::charging});
+  c.power_on();
+  c.set_fan_speed(40);
+  zassert_false(out.powered_off);
+  zassert_equal(out.signals.back(), signal::power_on);
+  zassert_equal(out.fan, 40);
 }
 
 ZTEST(controller, test_low_battery_at_start_powers_off_without_running_the_fan) {

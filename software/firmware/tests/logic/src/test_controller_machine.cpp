@@ -6,6 +6,7 @@
 #include <vector>
 
 using namespace gtfog;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -48,6 +49,34 @@ ZTEST(controller_machine, test_settings_move_the_lock_and_mode_states) {
   zassert_true(c.is(states::motion));
   c.update_settings({.mode = fan_mode::manual});
   zassert_true(c.is(states::manual));
+}
+
+// The lock and mode states always equal the flags of the settings, whichever way they were written.
+ZTEST(controller_machine, test_states_agree_with_the_settings_after_every_write) {
+  auto agree = [](controller &c) {
+    zassert_equal(c.is(states::locked), c.settings().transport_lock);
+    zassert_equal(c.is(states::unlocked), !c.settings().transport_lock);
+    zassert_equal(c.is(states::motion), c.settings().mode == fan_mode::motion);
+    zassert_equal(c.is(states::manual), c.settings().mode == fan_mode::manual);
+  };
+  for(bool lock_a : {false, true}) {
+    for(auto mode_a : {fan_mode::manual, fan_mode::motion}) {
+      for(bool lock_b : {false, true}) {
+        for(auto mode_b : {fan_mode::manual, fan_mode::motion}) {
+          fake_outputs out;
+          controller c{out};
+          c.configure({.transport_lock = lock_a, .mode = mode_a}); // Flash load at boot.
+          agree(c);
+          c.update_settings({.transport_lock = lock_b, .mode = mode_b}); // Bluetooth.
+          agree(c);
+          c.configure({.transport_lock = lock_a, .mode = mode_a});
+          agree(c);
+          c.handle(press(button_action::unlock));
+          agree(c);
+        }
+      }
+    }
+  }
 }
 
 ZTEST(controller_machine, test_lock_blocks_fan_and_strobe_in_manual_mode_and_unlock_restores) {
@@ -203,11 +232,15 @@ ZTEST(controller_machine, test_battery_warning_once_until_the_cell_recovers) {
   fake_outputs out;
   controller c{out};
   auto count = [&] { return std::count(out.signals.begin(), out.signals.end(), signal::battery_warning); };
-  c.handle(battery_status{3500, charger_state::not_charging}); // 5 %.
-  c.handle(battery_status{3500, charger_state::not_charging});
+  auto sample = [&](int millivolts) {
+    for(int i = 0; i != 3; ++i) { // The warning needs 3 samples in a row.
+      c.handle(battery_status{millivolts, charger_state::not_charging});
+    }
+  };
+  sample(3500); // 5 %.
   zassert_equal(count(), 1);
-  c.handle(battery_status{3700, charger_state::not_charging}); // 30 %: recovered.
-  c.handle(battery_status{3500, charger_state::not_charging});
+  sample(3700); // 30 %: recovered.
+  sample(3500);
   zassert_equal(count(), 2);
   zassert_true(c.is(states::running));
 }

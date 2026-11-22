@@ -112,7 +112,7 @@ struct controller_data {
   void lose_sensor();
   void store_settings(device_settings const &value, bool user_written);
   void lift_lock();
-  [[nodiscard]] auto record_battery(battery_status status) -> bool; // True when the battery is too low to keep running.
+  void record_battery(battery_status status); // Before the battery_sample event, so the guards are pure.
   [[nodiscard]] auto idle_limit() const noexcept -> std::chrono::seconds;
   [[nodiscard]] auto in_use(bool phone_connected) const noexcept -> bool;
 
@@ -125,14 +125,19 @@ struct controller_data {
   outputs &out;
   unsigned fan{0}; // The manual mode target.
   activity_level level{activity_level::still};
-  activity_level rising_to{activity_level::still}; // Lowest level seen while the raw level stayed above `level`.
-  unsigned rising_s{0};                            // Consecutive seconds above `level`.
-  unsigned falling_s{0};                           // Consecutive seconds below `level`.
+  activity_level rising_to{activity_level::still};  // Lowest level seen while the raw level stayed above `level`.
+  unsigned rising_s{0};                             // Consecutive seconds above `level`.
+  activity_level falling_to{activity_level::still}; // Highest level seen while the raw level stayed below `level`.
+  unsigned falling_s{0};                            // Consecutive seconds below `level`.
   bool strobe_on{false};
   std::uint8_t battery{0};
-  device_settings config; // `transport_lock` and `mode` always agree with the `locked` and `motion` states.
+  // The persisted settings. `transport_lock` and `mode` always equal the `locked` and `motion` states: only the settings_received
+  // rows (and the unlock row with `lift_lock`) change either side.
+  device_settings config;
   std::chrono::seconds idle{0};
   bool battery_warned{false};
+  unsigned warning_s{0}; // Consecutive samples at or below `warning_percent`.
+  bool exhausted{false}; // The cutoff guard's verdict on the last sample.
   battery_guard guard;
 };
 
@@ -150,9 +155,7 @@ struct fan_request {
 struct strobe_request {
   bool on;
 }; // Bluetooth.
-struct battery_sample {
-  battery_status status;
-};
+struct battery_sample {}; // The reading is recorded in `controller_data` first.
 struct elapsed {
   std::chrono::seconds passed;
   bool phone_connected;
@@ -179,6 +182,11 @@ inline constexpr auto manual = boost::sml::state<class manual_state>;
 inline constexpr auto motion = boost::sml::state<class motion_state>;
 } // namespace states
 
+// ponytail: percentages come from the rested-cell curve, so a fan under load reads lower; measure under load and tune.
+constexpr std::uint8_t warning_percent = 10;
+constexpr std::uint8_t recovered_percent = 15;
+constexpr unsigned warning_samples = 3; // Consecutive samples (30 s), like the cutoff, so fan inrush does not warn.
+
 namespace guards {
 using events::battery_sample, events::button, events::elapsed, events::settings_received, events::start_check;
 using data = controller_data;
@@ -194,10 +202,9 @@ inline constexpr auto refused_while_locked = [](button const &e) {
 };
 
 inline constexpr auto battery_too_low_to_start = [](start_check const &e) { return !battery_allows_start(e.status); };
-// Records the reading, then asks the cutoff guard (which counts samples), so it must be the first battery row.
-inline constexpr auto battery_exhausted = [](data &d, battery_sample const &e) { return d.record_battery(e.status); };
-inline constexpr auto battery_low_unwarned = [](data const &d) { return d.battery <= 10 && !d.battery_warned; };
-inline constexpr auto battery_recovered = [](data const &d) { return d.battery > 15; };
+inline constexpr auto battery_exhausted = [](data const &d) { return d.exhausted; };
+inline constexpr auto battery_low_unwarned = [](data const &d) { return d.warning_s >= warning_samples && !d.battery_warned; };
+inline constexpr auto battery_recovered = [](data const &d) { return d.battery > recovered_percent; };
 
 inline constexpr auto in_use = [](data const &d, elapsed const &e) { return d.in_use(e.phone_connected); };
 inline constexpr auto idle_limit_reached = [](data const &d, elapsed const &e) {
@@ -298,8 +305,11 @@ public:
   void handle(button_event event) { machine.process_event(events::button{event}); }
   void set_fan_speed(unsigned percent) { machine.process_event(events::fan_request{percent}); }
   void set_strobe(bool on) { machine.process_event(events::strobe_request{on}); }
-  void handle(battery_status status) { machine.process_event(events::battery_sample{status}); }
-  // Settings loaded from flash.
+  void handle(battery_status status) {
+    data.record_battery(status);
+    machine.process_event(events::battery_sample{});
+  }
+  // Settings loaded from flash; the lock and mode states follow them like those written by the user.
   void configure(device_settings loaded) { machine.process_event(events::settings_received{loaded, false}); }
   // The battery sample taken at boot: powers off at once, without starting the fan, when it is too low to run.
   void check_start(battery_status status) { machine.process_event(events::start_check{status}); }

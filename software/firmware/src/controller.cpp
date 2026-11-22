@@ -117,9 +117,13 @@ void controller_data::track_activity(activity_level raw) {
     }
   } else {
     rising_s = 0;
-    falling_s = raw < level ? falling_s + 1 : 0;
+    if(raw < level) {
+      falling_to = falling_s++ == 0 ? raw : std::max(falling_to, raw);
+    } else {
+      falling_s = 0;
+    }
     if(falling_s >= config.motion_delay_s) {
-      level = raw;
+      level = falling_to; // Mirrors the rise: the highest level of the whole window.
       falling_s = 0;
     }
   }
@@ -133,9 +137,10 @@ void controller_data::set_strobe(bool on) {
   apply_strobe();
 }
 
-auto controller_data::record_battery(battery_status status) -> bool {
+void controller_data::record_battery(battery_status status) {
   battery = battery_percentage(status.millivolts);
-  return guard.update(status);
+  warning_s = battery <= warning_percent ? warning_s + 1 : 0;
+  exhausted = guard.update(status);
 }
 
 auto controller_data::in_use(bool phone_connected) const noexcept -> bool {

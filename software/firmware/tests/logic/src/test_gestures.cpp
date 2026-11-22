@@ -110,6 +110,18 @@ ZTEST(gestures, test_third_quick_plus_press_unlocks) {
   zassert_true((tap(g, 1200ms) == button_event{button_action::plus}), "the count starts over");
 }
 
+ZTEST(gestures, test_minus_tap_resets_the_unlock_count) {
+  button_gestures g;
+  zassert_true((tap(g, 0ms) == button_event{button_action::plus}));
+  zassert_true((tap(g, 300ms) == button_event{button_action::plus}));
+  std::ignore = g.update(false, true, 600ms);
+  std::ignore = g.update(false, true, 660ms);
+  zassert_true((g.update(false, false, 700ms) == button_event{button_action::minus}));
+  zassert_true((tap(g, 900ms) == button_event{button_action::plus}), "the third plus tap would have unlocked");
+  zassert_true((tap(g, 1200ms) == button_event{button_action::plus}));
+  zassert_true((tap(g, 1500ms) == button_event{button_action::unlock}), "three plus taps after the minus tap unlock");
+}
+
 ZTEST(gestures, test_slow_plus_presses_do_not_unlock) {
   button_gestures g;
   for(auto at = 0ms; at < 6s; at += 1500ms) {

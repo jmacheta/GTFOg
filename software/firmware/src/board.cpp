@@ -155,6 +155,7 @@ public:
     auto key = k_spin_lock(&pattern_lock);
     current_pattern = pattern_of(what);
     pattern_phase = 0;
+    phase_end_ms = 0; // The new pattern does not wait for the old one's phase.
     k_spin_unlock(&pattern_lock, key);
     k_work_reschedule(&indicator_work, K_NO_WAIT); // Replaces a step that is waiting for its phase to end.
   }
@@ -196,6 +197,10 @@ gtfog::controller the_controller{board};
 
 } // namespace
 
+namespace gtfog {
+
 K_MUTEX_DEFINE(controller_mutex);
 
 auto app_controller() noexcept -> gtfog::controller & { return the_controller; }
+
+} // namespace gtfog

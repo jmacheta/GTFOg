@@ -20,9 +20,11 @@
 
 LOG_MODULE_REGISTER(ble, LOG_LEVEL_INF);
 
-K_MUTEX_DEFINE(save_lock); // Keeps the delayed save and the save before System OFF apart.
+using gtfog::accelerometer_stream, gtfog::with_controller;
 
 namespace {
+
+K_MUTEX_DEFINE(save_lock); // Keeps the delayed save and the save before System OFF apart.
 
 #define GTFOG_UUID(n) BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xa7f00000 + (n), 0x5c1e, 0x4b8e, 0x9d2a, 0x6f0e1c3b4d50))
 
@@ -276,6 +278,8 @@ BT_CONN_CB_DEFINE(connection_callbacks) = {
     .recycled = recycled,
 };
 
+namespace gtfog {
+
 void app_settings_load() {
   if(int err = settings_subsys_init(); err != 0) {
     LOG_WRN("settings init: %d", err);
@@ -309,9 +313,9 @@ void ble_state_changed() {
   }
 }
 
-void ble_settings_changed(gtfog::device_settings const &settings) {
+void ble_settings_changed(device_settings const &settings) {
   auto key = k_spin_lock(&pending_settings_lock);
-  pending_settings = gtfog::encode(settings);
+  pending_settings = encode(settings);
   k_spin_unlock(&pending_settings_lock, key);
   k_work_submit(&notify_settings_work);
   // Bursts (button auto-repeat in motion mode) become one flash write.
@@ -329,7 +333,7 @@ void ble_battery_changed(std::uint8_t percent) {
   }
 }
 
-void ble_charger_changed(gtfog::charger_state state) {
+void ble_charger_changed(charger_state state) {
   auto value = static_cast<std::uint8_t>(state);
   if(charger.exchange(value) != value && bt_is_ready()) {
     std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[charger_value], &value, sizeof(value)); // Fails only when nobody listens.
@@ -337,10 +341,12 @@ void ble_charger_changed(gtfog::charger_state state) {
 }
 
 auto ble_accelerometer_samples_per_packet() -> std::size_t {
-  return gtfog::accelerometer_samples_per_packet(att_mtu); // 0 without a connection.
+  return accelerometer_samples_per_packet(att_mtu); // 0 without a connection.
 }
 
 void ble_accelerometer_send(std::span<std::uint8_t const> packet) {
   // A full buffer drops the packet; the sequence number shows the gap to the phone.
   std::ignore = bt_gatt_notify(nullptr, &gtfog_service.attrs[accelerometer_value], packet.data(), static_cast<std::uint16_t>(packet.size()));
 }
+
+} // namespace gtfog

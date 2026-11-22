@@ -6,8 +6,6 @@
 
 namespace gtfog {
 
-using namespace std::chrono_literals;
-
 enum class button_action {
   plus,          // Raise the fan speed by `steps`.
   minus,         // Lower the fan speed by `steps`.
@@ -25,15 +23,15 @@ struct button_event {
 };
 
 struct button_timing {
-  std::chrono::milliseconds short_press{50ms}; // Shorter presses are bounces.
-  std::chrono::milliseconds long_press{500ms}; // Held this long, a button repeats.
-  std::chrono::milliseconds repeat_interval{200ms};
-  std::chrono::milliseconds acceleration{3s}; // Every this much of holding adds a step per repeat.
+  std::chrono::milliseconds short_press{50}; // Shorter presses are bounces.
+  std::chrono::milliseconds long_press{500}; // Held this long, a button repeats.
+  std::chrono::milliseconds repeat_interval{200};
+  std::chrono::milliseconds acceleration{std::chrono::seconds{3}}; // Every this much of holding adds a step per repeat.
   unsigned max_steps{5};
-  std::chrono::milliseconds stuck{30s}; // Held this long, a button is ignored until released.
-  std::chrono::milliseconds toggle_strobe{2s};
-  std::chrono::milliseconds power_off{5s};
-  std::chrono::milliseconds unlock_window{2s};
+  std::chrono::milliseconds stuck{std::chrono::seconds{30}}; // Held this long, a button is ignored until released.
+  std::chrono::milliseconds toggle_strobe{std::chrono::seconds{2}};
+  std::chrono::milliseconds power_off{std::chrono::seconds{5}};
+  std::chrono::milliseconds unlock_window{std::chrono::seconds{2}};
   unsigned unlock_taps{3};
 };
 

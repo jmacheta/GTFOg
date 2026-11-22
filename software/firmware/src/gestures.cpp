@@ -58,7 +58,11 @@ auto button_gestures::single(button &b, bool is_pressed, button_action action, s
       return std::nullopt;
     }
     if(held < timing.long_press) {
-      return action == button_action::plus ? short_plus(now) : button_event{action};
+      if(action == button_action::plus) {
+        return short_plus(now);
+      }
+      taps = 0; // A minus tap breaks the unlock sequence.
+      return button_event{action};
     }
     // Released after the long-press time but before the first repeat: one step.
     return repeated ? std::nullopt : std::optional{button_event{action}};

@@ -10,6 +10,8 @@
 
 LOG_MODULE_REGISTER(buttons, LOG_LEVEL_INF);
 
+using gtfog::with_controller;
+
 namespace {
 
 constexpr auto poll_interval = K_MSEC(20);
@@ -70,15 +72,21 @@ K_THREAD_DEFINE(buttons, 1536, buttons_thread, nullptr, nullptr, nullptr, 5, 0, 
 
 } // namespace
 
-void buttons_arm_wake() {
+void gtfog::buttons_arm_wake() {
   constexpr auto release_timeout_ms = 10'000;
   for(int waited = 0; waited < release_timeout_ms && (gpio_pin_get_dt(&plus) > 0 || gpio_pin_get_dt(&minus) > 0); waited += 10) {
     k_msleep(10);
   }
+  // A button still held would wake the chip at once, so a stuck one is left out; with both held there is no choice.
+  bool plus_held = gpio_pin_get_dt(&plus) > 0;
+  bool minus_held = gpio_pin_get_dt(&minus) > 0;
+  auto arm = [](gpio_dt_spec const &button, bool on) {
+    return gpio_pin_interrupt_configure_dt(&button, on ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
+  };
   // Not registered when setup failed (-EINVAL); the level interrupts below do not need the callbacks.
   std::ignore = gpio_remove_callback_dt(&plus, &plus_callback);
   std::ignore = gpio_remove_callback_dt(&minus, &minus_callback);
-  if(gpio_pin_interrupt_configure_dt(&plus, GPIO_INT_LEVEL_ACTIVE) != 0 || gpio_pin_interrupt_configure_dt(&minus, GPIO_INT_LEVEL_ACTIVE) != 0) {
+  if(arm(plus, !plus_held || minus_held) != 0 || arm(minus, !minus_held || plus_held) != 0) {
     LOG_ERR("cannot arm the buttons for wake-up");
   }
 }
